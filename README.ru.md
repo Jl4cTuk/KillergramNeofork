@@ -41,4 +41,4 @@
 * **'Поддерживается ли LSPatch?'** - Сейчас модуль не поддерживает работу в режиме LSPatch.
 
 ## Скачать
-Скачайте последнюю версию [со страницы релизов.](https://github.com/AetherMagee/KillergramNeo/releases/latest)
+Скачайте последнюю версию форка [со страницы релизов.](https://github.com/Jl4cTuk/KillergramNeofork/releases/latest)

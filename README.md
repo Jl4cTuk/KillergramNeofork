@@ -10,7 +10,7 @@ A successor to [Killergram](https://web.archive.org/web/20240320064655/https://g
 🇺🇸 Currently reading in English | 🇷🇺 [Переключиться на русский язык](/README.ru.md)
 
 ## ⬇️ Downloads
-Download latest release [here.](https://github.com/AetherMagee/KillergramNeo/releases/latest)
+Download the latest fork release [here.](https://github.com/Jl4cTuk/KillergramNeofork/releases/latest)
 
 ## Installation requirements
 To use Killergram Neo, you need:
@@ -92,4 +92,3 @@ If you still want to inject something into Neko, check out [Re:Telegram.](https:
 * **'Chat translation spoof for non-premium?'** - Impossible, as Telegram apparently rate-limits users based on some serverside Premium check.
 * **'Auto-update?'** - Use [Obtainium.](https://github.com/ImranR98/Obtainium)
 * **'LSPatch support?'** - There is no support now.
-
