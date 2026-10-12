@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.BuildConfig
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.content.ActivityNotFoundException
@@ -11,7 +12,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
-private const val MODULE_PACKAGE = "aether.killergram.neo"
+private const val MODULE_PACKAGE = BuildConfig.APPLICATION_ID
 private const val MODULE_SETTINGS_ACTIVITY = "aether.killergram.neo.MainActivity"
 
 /**

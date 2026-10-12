@@ -12,7 +12,7 @@ class PreferencesUtils {
 
     fun getPrefsInstance(prefsName: String = PreferenceKeys.PREFS_NAME): XSharedPreferences {
         return if (!this::preferencesInstance.isInitialized) {
-            val instance = XSharedPreferences("aether.killergram.neo", prefsName)
+            val instance = XSharedPreferences(BuildConfig.APPLICATION_ID, prefsName)
             instance.makeWorldReadable()
             this.preferencesInstance = instance
             instance

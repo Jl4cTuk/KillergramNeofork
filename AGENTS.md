@@ -59,6 +59,7 @@ Icon injection works differently from code hooks — it uses `IXposedHookInitPac
 - The module maintains a `packageBlocklist` to avoid hooking into itself or GMS.
 - `Utils.kt` provides a `log()` helper that wraps `XposedBridge.log()` with level-based filtering (DEBUG output controlled by the debug logging preference).
 - Version is in `app/build.gradle.kts` (`versionName` / `versionCode`).
+- This fork's `applicationId` is `aether.killergram.neo.fork` (so it can coexist with upstream KG Neo); the code `namespace` stays `aether.killergram.neo`. Never hard-code the package name — use `BuildConfig.APPLICATION_ID`.
 
 ## CI
 

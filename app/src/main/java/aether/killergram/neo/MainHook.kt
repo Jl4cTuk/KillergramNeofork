@@ -50,7 +50,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
     private var moduleResources: XModuleResources? = null
     private val prefs = PreferencesUtils().getPrefsInstance()
     private val packageBlocklist = arrayOf(  // Apparently sometimes LSPosed will just hook us into random crap like GMS or ourselves
-            "aether.killergram.neo",         // This is supposed to solve this problem
+            BuildConfig.APPLICATION_ID,      // This is supposed to solve this problem
             "com.google.android.gms"
         )
     override fun initZygote(startupParam: StartupParam?) {

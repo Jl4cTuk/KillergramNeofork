@@ -21,7 +21,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "aether.killergram.neo"
+        applicationId = "aether.killergram.neo.fork"
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 34
@@ -62,6 +62,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
