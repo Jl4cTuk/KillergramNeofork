@@ -1,6 +1,7 @@
 package aether.killergram.neo
 
 import aether.killergram.neo.core.PreferenceKeys
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.hooks.Hooks
 import aether.killergram.neo.hooks.cameraDefaultBack
 import aether.killergram.neo.hooks.cameraHigherBitrate
@@ -8,6 +9,8 @@ import aether.killergram.neo.hooks.cameraHigherResolution
 import aether.killergram.neo.hooks.cameraKeepZoom
 import aether.killergram.neo.hooks.forceAllowForwards
 import aether.killergram.neo.hooks.forceSystemTypeface
+import aether.killergram.neo.hooks.addSettingsEntry
+import aether.killergram.neo.hooks.hideTopics
 import aether.killergram.neo.hooks.hideChannelBottomBar
 import aether.killergram.neo.hooks.hideAppUpdates
 import aether.killergram.neo.hooks.hideDialogsFloatingButton
@@ -52,6 +55,14 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
         )
     override fun initZygote(startupParam: StartupParam?) {
         this.moduleResources = XModuleResources.createInstance(startupParam!!.modulePath, null)
+        modulePath = startupParam.modulePath
+    }
+
+    companion object {
+        /** Path to this module's APK, captured at Zygote init; used to load native libs. */
+        @JvmStatic
+        var modulePath: String? = null
+            private set
     }
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam?) {
         if (lpparam?.packageName == null || packageBlocklist.contains(lpparam.packageName)) {
@@ -67,6 +78,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
             PreferenceKeys.REMOVE_SPONSORED to { hooks.killSponsoredMessages() },
             PreferenceKeys.FORCE_FORWARD to { hooks.forceAllowForwards() },
             PreferenceKeys.HIDE_STORIES to { hooks.killStories() },
+            PreferenceKeys.HIDE_TOPICS to { hooks.hideTopics() },
             PreferenceKeys.EDITED_ICON to { hooks.replaceEditedLabelWithIcon() },
             PreferenceKeys.SHOW_SECONDS to { hooks.showTimestampSeconds() },
             PreferenceKeys.SHOW_USER_ID to { hooks.showProfileUserId() },
@@ -90,6 +102,10 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
             PreferenceKeys.CAMERA_DEFAULT_BACK to { hooks.cameraDefaultBack() },
             PreferenceKeys.CAMERA_KEEP_ZOOM to { hooks.cameraKeepZoom() }
         )
+
+        // Always-on entry point to the module settings from inside Telegram, so the
+        // launcher icon can be hidden.
+        hooks.addSettingsEntry()
 
         hooksMap.forEach { (key, action) ->
             if (prefs.getBoolean(key, false)) {
@@ -136,6 +152,8 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
             val centerTitle = prefs.getBoolean(PreferenceKeys.APP_TITLE_CENTER, false)
             hooks.replaceAppTitle(mode, customText ?: "", centerTitle)
         }
+
+        TgDeobf.release()
     }
 
     override fun handleInitPackageResources(resparam: XC_InitPackageResources.InitPackageResourcesParam?) {

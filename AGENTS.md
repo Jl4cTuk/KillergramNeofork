@@ -35,6 +35,19 @@ Preferences bridge the two processes: the UI writes them, the hooks read them at
 3. Register the hook in `MainHook.kt`'s `hooksMap` (maps pref key → hook invocation).
 4. Add a `ModuleToggle` entry in `ToggleCatalog.kt` under the appropriate section.
 
+### Telegram 12.10.2+ obfuscation
+
+Official Telegram builds are R8-obfuscated since 12.10.2. `org.telegram.ui.*` classes and their members get new names in every release (`ChatActivity` → `no`, `InstantCameraView` → `o60` → `h70`), so `loadClass("org.telegram.ui.…")` fails. `org.telegram.messenger.*`, `org.telegram.tgnet.*` and `org.telegram.messenger.R` keep their names.
+
+- Prefer anchoring hooks in the kept packages (e.g. `MessagesController`, `TopicsController`, `ApplicationLoader.addItemOptions`).
+- When a UI class is unavoidable, resolve it at runtime in `core/TgDeobf.kt` with DexKit (string literals, signatures, callers, reads of `R$drawable` fields) and cache the result. Never hard-code obfuscated names.
+- `libdexkit.so` is loaded explicitly from the module APK's `lib/<abi>/` (`MainHook.modulePath`), because `System.loadLibrary` cannot see module libraries inside the Telegram process.
+- After a Telegram update, check the `Resolved …` lines in the Vector log (debug logging on) to confirm every fingerprint still resolves.
+
+### Settings entry and launcher icon
+
+`hooks/SettingsEntry.kt` always adds a "Killergram" item to Telegram's chat list "⋮" menu that opens `MainActivity`. `MainActivity` also declares `de.robv.android.xposed.category.MODULE_SETTINGS`, so the module list in Vector can open it. The launcher icon is the `.LauncherAlias` activity-alias, which the "Hide launcher icon" setting disables. Keep the module free of requested permissions (`<queries>` instead of `QUERY_ALL_PACKAGES`; androidx's `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` is removed), otherwise Android shows an App info stub in place of the hidden icon.
+
 ### Resource Replacement (Solar Icons)
 
 Icon injection works differently from code hooks — it uses `IXposedHookInitPackageResources` in `MainHook`. Drawable resources with a `_solar` suffix in the module replace matching drawables (minus the suffix) in the target app.

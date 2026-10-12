@@ -1,6 +1,7 @@
 package aether.killergram.neo.ui.screens
 
 import aether.killergram.neo.core.PreferenceKeys
+import aether.killergram.neo.data.LauncherIcon
 import aether.killergram.neo.data.ModulePrefsStore
 import aether.killergram.neo.isLsposedAvailable
 import aether.killergram.neo.ui.model.ToggleCatalog
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -151,9 +154,10 @@ private fun SettingsSheet(
         if (isModuleActive) ModulePrefsStore.create(context) else null
     }
     val toggle = remember { ToggleCatalog.settingsSections.first().toggles.first() }
-    var checked by rememberSaveable {
+    var debugChecked by rememberSaveable {
         mutableStateOf(store?.isEnabled(PreferenceKeys.DEBUG_LOGGING) ?: false)
     }
+    var iconHidden by rememberSaveable { mutableStateOf(LauncherIcon.isHidden(context)) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Text(
@@ -162,66 +166,94 @@ private fun SettingsSheet(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
         )
 
-        val shape = RoundedCornerShape(18.dp)
-        val cardColor = if (checked) {
-            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        }
+        SettingsSwitchCard(
+            icon = Icons.Outlined.BugReport,
+            title = toggle.title,
+            description = toggle.description,
+            checked = debugChecked,
+            onCheckedChange = { enabled ->
+                debugChecked = enabled
+                store?.setEnabled(toggle.key, enabled)
+            }
+        )
 
-        Surface(
+        SettingsSwitchCard(
+            icon = Icons.Outlined.VisibilityOff,
+            title = "Hide launcher icon",
+            description = "Open settings from Telegram's \"⋮\" menu (Killergram) or from the module list in Vector instead.",
+            checked = iconHidden,
+            onCheckedChange = { hidden ->
+                iconHidden = hidden
+                LauncherIcon.setHidden(context, hidden)
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsSwitchCard(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val shape = RoundedCornerShape(18.dp)
+    val cardColor = if (checked) {
+        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = shape,
+        color = cardColor
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            shape = shape,
-            color = cardColor
+                .toggleable(
+                    value = checked,
+                    onValueChange = onCheckedChange,
+                    role = Role.Switch
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .toggleable(
-                        value = checked,
-                        onValueChange = { enabled ->
-                            checked = enabled
-                            store?.setEnabled(toggle.key, enabled)
-                        },
-                        role = Role.Switch
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.size(36.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.BugReport,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(8.dp)
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = toggle.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = toggle.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Switch(
-                    checked = checked,
-                    onCheckedChange = null
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(8.dp)
                 )
             }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Switch(
+                checked = checked,
+                onCheckedChange = null
+            )
         }
     }
 }

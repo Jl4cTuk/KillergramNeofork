@@ -7,6 +7,7 @@ object PreferenceKeys {
     const val SOLAR_ICONS = "solar"
     const val ADAPTIVE_MONET_THEMES = "adaptivemonetthemes"
     const val HIDE_STORIES = "stories"
+    const val HIDE_TOPICS = "hidetopics"
     const val EDITED_ICON = "editedicon"
     const val SHOW_SECONDS = "seconds"
     const val SHOW_USER_ID = "userid"

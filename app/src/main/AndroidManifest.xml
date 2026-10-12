@@ -1,8 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+    <!-- Only the Telegram clients from the Xposed scope need to be visible (labels,
+         restart). Declaring them instead of QUERY_ALL_PACKAGES keeps the module free of
+         requested permissions, so Android does not replace a hidden launcher icon with
+         an App info stub. -->
+    <queries>
+        <package android:name="org.telegram.messenger" />
+        <package android:name="org.telegram.messenger.web" />
+        <package android:name="org.telegram.messenger.beta" />
+        <package android:name="tw.nekomimi.nekogram" />
+        <package android:name="nekox.messenger" />
+        <package android:name="com.cool2645.nekolite" />
+        <package android:name="org.telegram.plus" />
+        <package android:name="com.iMe.android" />
+        <package android:name="org.telegram.BifToGram" />
+        <package android:name="ua.itaysonlab.messenger" />
+        <package android:name="org.forkclient.messenger.beta" />
+        <package android:name="org.aka.messenger" />
+        <package android:name="ellipi.messenger" />
+        <package android:name="com.exteragram.messenger" />
+        <package android:name="uz.unnarsx.cherrygram" />
+        <package android:name="it.octogram.android" />
+    </queries>
+
+    <!-- androidx.core adds this for ContextCompat.registerReceiver(RECEIVER_NOT_EXPORTED)
+         on API < 33. The module never registers receivers through ContextCompat, and any
+         requested permission makes Android show an App info stub for a hidden launcher
+         icon, so drop it. -->
+    <permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+    <uses-permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -13,6 +45,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.KillergramNeo"
         tools:targetApi="31">
+        <!-- Exported so Telegram's in-app "Killergram" menu entry can open it, and
+             tagged MODULE_SETTINGS so Vector/LSPosed can open it from the module list
+             even when the launcher icon is hidden. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -20,9 +55,22 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
-                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
+
+        <!-- Launcher icon. Disabled at runtime by the "Hide launcher icon" setting. -->
+        <activity-alias
+            android:name=".LauncherAlias"
+            android:enabled="true"
+            android:exported="true"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <meta-data
             android:name="xposedmodule"

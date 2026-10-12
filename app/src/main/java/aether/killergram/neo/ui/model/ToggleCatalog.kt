@@ -105,6 +105,12 @@ object ToggleCatalog {
                     icon = ToggleIcon.VISIBILITY_OFF
                 ),
                 ModuleToggle(
+                    title = "Hide forum topics",
+                    key = PreferenceKeys.HIDE_TOPICS,
+                    description = "Adds \"Hide topic\" to a topic's long-press menu in forum groups. Bring hidden topics back with \"Show hidden topics\" in the menu of any other topic in that group.",
+                    icon = ToggleIcon.VISIBILITY_OFF
+                ),
+                ModuleToggle(
                     title = "Hide chat list create button",
                     key = PreferenceKeys.HIDE_DIALOGS_FAB,
                     description = "Hides floating compose/story buttons on the main chat list screen.",
@@ -113,7 +119,7 @@ object ToggleCatalog {
                 ModuleToggle(
                     title = "Customize hamburger menu buttons",
                     key = PreferenceKeys.CUSTOMIZE_HAMBURGER_MENU,
-                    description = "Choose which entries Telegram should hide from the left hamburger menu.",
+                    description = "Choose which entries Telegram should hide from the left hamburger menu. In Telegram 12.2+ \"Contacts\" also hides the Contacts tab of the bottom bar.",
                     icon = ToggleIcon.MENU,
                     parameters = listOf(
                         ToggleParameter(
