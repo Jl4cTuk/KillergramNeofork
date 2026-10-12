@@ -37,6 +37,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default "tools platform-tools" fails: the legacy "tools" package is
+          # gone from the SDK repository.
+          packages: platform-tools
 
       - name: Decode keystore for debug signing
         if: env.HAS_SIGNING_SECRETS == 'true'
@@ -91,6 +95,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default "tools platform-tools" fails: the legacy "tools" package is
+          # gone from the SDK repository.
+          packages: platform-tools
 
       - name: Verify signing secrets are present
         env:
