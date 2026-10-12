@@ -1,121 +1,125 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
-import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.graphics.drawable.Drawable
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.style.ReplacementSpan
+import android.view.View
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import kotlin.math.abs
-import kotlin.math.roundToInt
+import java.lang.reflect.Field
+import kotlin.math.ceil
+import kotlin.math.min
 
-private const val EDIT_ICON_PLACEHOLDER = "d"
-private const val EDIT_ICON_FALLBACK = "\u270e"
+// Stands in for the "edited" label while Telegram measures the time string, so the
+// bubble reserves the right width; the icon span is then laid over it. A real glyph
+// keeps the label readable if the span cannot be applied.
+private const val EDIT_ICON_PLACEHOLDER = "✎"
 private const val EDIT_ICON_SCALE = 0.75f
-private const val EDIT_ICON_TOP_OFFSET = 0
 
-private val editedLabelCache = HashMap<String, String>()
-private val editedIconCache = HashMap<String, Int?>()
+private val measuringTime = ThreadLocal.withInitial { false }
+
+@Volatile private var timeStringField: Field? = null
+private var editedIcon: Drawable? = null
 
 fun Hooks.replaceEditedLabelWithIcon() {
     log("Replacing edited labels with icon...")
 
-    val chatMessageCellClass = loadClass("org.telegram.ui.Cells.ChatMessageCell") ?: return
-    val themeClass = loadClass("org.telegram.ui.ActionBar.Theme") ?: return
-    val coloredImageSpanClass = loadClass("org.telegram.ui.Components.ColoredImageSpan")
+    val localeControllerClass = loadClass("org.telegram.messenger.LocaleController") ?: return
+    val editedMessageId = runCatching {
+        XposedHelpers.getStaticIntField(
+            XposedHelpers.findClass("org.telegram.messenger.R\$string", lpparam.classLoader),
+            "EditedMessage"
+        )
+    }.getOrNull() ?: run {
+        log("R.string.EditedMessage not found — edited icon skipped", "ERROR")
+        return
+    }
 
-    XposedBridge.hookAllMethods(
-        chatMessageCellClass,
-        "measureTime",
+    // ChatMessageCell is obfuscated in Telegram 12.10.2+; measureTime is found by
+    // fingerprint (it is the cell method that reads R.string.EditedMessage).
+    val measureTime = TgDeobf.measureTime(lpparam) ?: return
+
+    XposedBridge.hookMethod(measureTime, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            measuringTime.set(true)
+        }
+
+        override fun afterHookedMethod(param: MethodHookParam) {
+            measuringTime.set(false)
+            runCatching {
+                applyEditedIcon(param.thisObject as? View ?: return)
+            }.onFailure {
+                log("Failed to apply edited icon: ${it.message}", "DEBUG")
+            }
+        }
+    })
+
+    // measureTime concatenates getString(R.string.EditedMessage) with the time as plain
+    // strings, so swap the label for the placeholder at the source.
+    XposedHelpers.findAndHookMethod(
+        localeControllerClass,
+        "getString",
+        Int::class.javaPrimitiveType,
         object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val cell = param.thisObject ?: return
-                val edited = runCatching {
-                    XposedHelpers.getBooleanField(cell, "edited")
-                }.getOrDefault(false)
-                if (!edited) {
-                    return
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (measuringTime.get() == true && param.args[0] == editedMessageId) {
+                    param.result = EDIT_ICON_PLACEHOLDER
                 }
-
-                val currentTimeString = runCatching {
-                    XposedHelpers.getObjectField(cell, "currentTimeString") as? CharSequence
-                }.getOrNull() ?: return
-
-                val editedLabel = resolveEditedLabel(cell) ?: return
-                if (editedLabel.isBlank()) {
-                    return
-                }
-
-                val editedIndex = currentTimeString.toString().indexOf(editedLabel)
-                if (editedIndex < 0) {
-                    return
-                }
-                val editedEnd = editedIndex + editedLabel.length
-
-                val chatTimePaint = runCatching {
-                    XposedHelpers.getStaticObjectField(themeClass, "chat_timePaint") as? Paint
-                }.getOrNull() ?: return
-
-                val iconDrawableId = resolveEditedIconDrawableId(cell)
-                val iconSpan = if (iconDrawableId != null && coloredImageSpanClass != null) {
-                    createEditedIconSpan(coloredImageSpanClass, iconDrawableId, chatTimePaint)
-                } else {
-                    null
-                }
-
-                val replacement = if (iconSpan != null) EDIT_ICON_PLACEHOLDER else EDIT_ICON_FALLBACK
-                val updated = SpannableStringBuilder(currentTimeString).apply {
-                    replace(editedIndex, editedEnd, replacement)
-                    if (iconSpan != null) {
-                        setSpan(
-                            iconSpan,
-                            editedIndex,
-                            editedIndex + replacement.length,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    }
-                }
-                XposedHelpers.setObjectField(cell, "currentTimeString", updated)
-
-                val replacementWidth = if (iconSpan != null) {
-                    estimateIconWidth(chatTimePaint)
-                } else {
-                    chatTimePaint.measureText(EDIT_ICON_FALLBACK)
-                }
-                shrinkTimeWidths(cell, chatTimePaint.measureText(editedLabel), replacementWidth)
             }
         }
     )
 }
 
-private fun resolveEditedLabel(cell: Any): String? {
-    val context = getViewContext(cell) ?: return null
-    val localeTag = context.resources.configuration.locales.get(0)?.toLanguageTag() ?: "default"
-    val cacheKey = "${context.packageName}:$localeTag"
-    editedLabelCache[cacheKey]?.let { return it }
+private fun applyEditedIcon(cell: View) {
+    val field = timeStringField
+        ?: findTimeStringField(cell)?.also { timeStringField = it }
+        ?: return
+    val timeString = field.get(cell) as? CharSequence ?: return
+    val index = timeString.indexOf(EDIT_ICON_PLACEHOLDER)
+    if (index < 0) return
 
-    val resourceId = context.resources.getIdentifier("EditedMessage", "string", context.packageName)
-    if (resourceId != 0) {
-        val value = runCatching { context.getString(resourceId) }.getOrNull()
-        if (!value.isNullOrBlank()) {
-            editedLabelCache[cacheKey] = value
-        }
-        return value
+    val icon = editedIcon ?: resolveEditedIcon(cell)?.also { editedIcon = it } ?: return
+    val updated = SpannableStringBuilder(timeString).apply {
+        setSpan(
+            EditedIconSpan(icon),
+            index,
+            index + EDIT_ICON_PLACEHOLDER.length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
     }
-    return null
+    field.set(cell, updated)
 }
 
-private fun resolveEditedIconDrawableId(cell: Any): Int? {
-    val context = getViewContext(cell) ?: return null
-    val packageName = context.packageName
-    if (editedIconCache.containsKey(packageName)) {
-        return editedIconCache[packageName]
+/**
+ * The cell's CharSequence field that holds the freshly built time string: the only one
+ * containing the placeholder right after measureTime. Ambiguous matches are not cached.
+ */
+private fun findTimeStringField(cell: View): Field? {
+    val matches = ArrayList<Field>()
+    var current: Class<*>? = cell.javaClass
+    while (current != null && current != View::class.java) {
+        current.declaredFields.forEach { field ->
+            if (field.type != CharSequence::class.java) return@forEach
+            field.isAccessible = true
+            val value = field.get(cell) as? CharSequence ?: return@forEach
+            if (value.contains(EDIT_ICON_PLACEHOLDER)) matches += field
+        }
+        current = current.superclass
     }
+    return matches.singleOrNull()
+}
 
-    val resources = context.resources
-
+private fun resolveEditedIcon(cell: View): Drawable? {
+    val resources = cell.context.resources
+    val packageName = cell.context.packageName
     val candidates = listOf(
         "group_edit_profile", // Matches the profile header pencil icon style.
         "group_edit",
@@ -124,53 +128,52 @@ private fun resolveEditedIconDrawableId(cell: Any): Int? {
         "menu_edit_appearance"
     )
     for (name in candidates) {
-        val iconId = resources.getIdentifier(name, "drawable", packageName)
-        if (iconId != 0) {
-            editedIconCache[packageName] = iconId
-            return iconId
+        val id = resources.getIdentifier(name, "drawable", packageName)
+        if (id != 0) {
+            return runCatching { resources.getDrawable(id, null) }.getOrNull()
         }
     }
-
-    editedIconCache[packageName] = null
     return null
 }
 
-private fun getViewContext(cell: Any): Context? {
-    return runCatching {
-        XposedHelpers.callMethod(cell, "getContext") as? Context
-    }.getOrNull()
-}
+/**
+ * Draws the pencil in place of the placeholder glyph. getSize() reports the glyph's own
+ * width, which is what Telegram measured with Paint.measureText, so the bubble layout
+ * stays consistent. The icon follows the time color of the bubble.
+ */
+private class EditedIconSpan(icon: Drawable) : ReplacementSpan() {
 
-private fun createEditedIconSpan(coloredImageSpanClass: Class<*>, iconResId: Int, paint: Paint): Any? {
-    val span = runCatching {
-        coloredImageSpanClass.getConstructor(Int::class.javaPrimitiveType).newInstance(iconResId)
-    }.getOrNull() ?: return null
+    private val drawable: Drawable = icon.constantState?.newDrawable()?.mutate() ?: icon
 
-    runCatching { XposedHelpers.callMethod(span, "setRelativeSize", paint.fontMetricsInt) }
-    runCatching { XposedHelpers.callMethod(span, "setScale", EDIT_ICON_SCALE, EDIT_ICON_SCALE) }
-    runCatching { XposedHelpers.callMethod(span, "setTopOffset", EDIT_ICON_TOP_OFFSET) }
+    override fun getSize(
+        paint: Paint,
+        text: CharSequence?,
+        start: Int,
+        end: Int,
+        fm: Paint.FontMetricsInt?
+    ): Int = ceil(paint.measureText(text, start, end)).toInt()
 
-    return span
-}
+    override fun draw(
+        canvas: Canvas,
+        text: CharSequence?,
+        start: Int,
+        end: Int,
+        x: Float,
+        top: Int,
+        y: Int,
+        bottom: Int,
+        paint: Paint
+    ) {
+        val width = paint.measureText(text, start, end)
+        val fontHeight = paint.descent() - paint.ascent()
+        val size = min(fontHeight * EDIT_ICON_SCALE, width * 1.15f).toInt()
+        val left = (x + (width - size) / 2f).toInt()
+        val centerY = y + (paint.ascent() + paint.descent()) / 2f
+        val iconTop = (centerY - size / 2f).toInt()
 
-private fun estimateIconWidth(paint: Paint): Float {
-    val fontMetrics = paint.fontMetricsInt
-    val base = abs(fontMetrics.ascent) + abs(fontMetrics.descent)
-    return base * EDIT_ICON_SCALE
-}
-
-private fun shrinkTimeWidths(cell: Any, editedLabelWidth: Float, replacementWidth: Float) {
-    val delta = (editedLabelWidth - replacementWidth).roundToInt()
-    if (delta <= 0) {
-        return
-    }
-
-    runCatching {
-        val current = XposedHelpers.getIntField(cell, "timeTextWidth")
-        XposedHelpers.setIntField(cell, "timeTextWidth", (current - delta).coerceAtLeast(0))
-    }
-    runCatching {
-        val current = XposedHelpers.getIntField(cell, "timeWidth")
-        XposedHelpers.setIntField(cell, "timeWidth", (current - delta).coerceAtLeast(0))
+        drawable.colorFilter = PorterDuffColorFilter(paint.color, PorterDuff.Mode.SRC_IN)
+        drawable.alpha = paint.alpha
+        drawable.setBounds(left, iconTop, left + size, iconTop + size)
+        drawable.draw(canvas)
     }
 }

@@ -3,6 +3,7 @@ package aether.killergram.neo.hooks
 import aether.killergram.neo.PreferencesUtils
 import aether.killergram.neo.core.HamburgerMenuItems
 import aether.killergram.neo.core.PreferenceKeys
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.content.Context
 import android.view.View
@@ -70,6 +71,74 @@ fun Hooks.hideHamburgerMenuButtons() {
     if (drawerLayoutAdapterClass != null) {
         hookLegacyDrawerAdapter(drawerLayoutAdapterClass, hiddenItems)
     }
+
+    hideMainTabs(hiddenItems)
+}
+
+// Menu entries that Telegram 12.2+ moved into the bottom tab bar, keyed by the name of
+// the tab's enum constant (enum names survive R8).
+private val mainTabByMenuItem = mapOf(
+    "contacts" to "CONTACTS",
+)
+
+/**
+ * Telegram 12.2+ replaced the drawer with a bottom tab bar (Chats, Contacts, Settings or
+ * Calls, Profile). Hide the tabs matching hidden menu entries once the bar is built,
+ * through the bar's own show/hide method — the one Telegram uses to swap Settings and
+ * Calls — so the remaining tabs are laid out without a gap.
+ */
+private fun Hooks.hideMainTabs(hiddenItems: Set<String>) {
+    val hiddenTabs = hiddenItems.mapNotNull(mainTabByMenuItem::get).toSet()
+    if (hiddenTabs.isEmpty()) return
+
+    val createView = TgDeobf.mainTabsCreateView(lpparam) ?: return
+    XposedBridge.hookMethod(createView, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            runCatching {
+                hideMainTabButtons(param.thisObject, hiddenTabs)
+            }.onFailure {
+                log("Failed to hide main tabs: ${it.message}", "ERROR")
+            }
+        }
+    })
+}
+
+private fun hideMainTabButtons(fragment: Any, hiddenTabs: Set<String>) {
+    // The tab buttons are kept in the fragment's only array of views.
+    val tabs = fragment.javaClass.declaredFields
+        .firstOrNull { it.type.isArray && View::class.java.isAssignableFrom(it.type.componentType!!) }
+        ?.apply { isAccessible = true }
+        ?.get(fragment) as? Array<*> ?: return
+
+    tabs.filterIsInstance<View>().forEach { tab ->
+        val kinds = tab.javaClass.declaredFields
+            .filter { it.type.isEnum }
+            .mapNotNull { field -> field.apply { isAccessible = true }.get(tab) as? Enum<*> }
+        if (kinds.none { it.name in hiddenTabs }) return@forEach
+
+        val container = tab.parent as? ViewGroup
+        val setTabVisible = container?.let { findTabVisibilitySetter(it.javaClass) }
+        if (setTabVisible != null) {
+            setTabVisible.invoke(container, tab, false, false)
+        } else {
+            tab.visibility = View.GONE
+        }
+    }
+}
+
+/** void (View, boolean visible, boolean animated) on the tab bar or its superclasses. */
+private fun findTabVisibilitySetter(containerClass: Class<*>): java.lang.reflect.Method? {
+    var current: Class<*>? = containerClass
+    while (current != null && current != ViewGroup::class.java) {
+        current.declaredMethods.firstOrNull { method ->
+            method.returnType == Void.TYPE &&
+                method.parameterTypes.contentEquals(
+                    arrayOf(View::class.java, java.lang.Boolean.TYPE, java.lang.Boolean.TYPE)
+                )
+        }?.let { return it.apply { isAccessible = true } }
+        current = current.superclass
+    }
+    return null
 }
 
 private fun hookLegacyDrawerAdapter(

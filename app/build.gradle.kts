@@ -67,6 +67,11 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // DexKit ships a native library (libdexkit.so). Keep it uncompressed and
+        // extractable so it can be loaded from the Xposed module's process.
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -89,5 +94,6 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+    implementation(libs.dexkit)
     compileOnly("de.robv.android.xposed:api:82")
 }
