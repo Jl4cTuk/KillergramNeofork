@@ -42,6 +42,7 @@ object PreferenceKeys {
     const val CAMERA_RESOLUTION_VALUE = "cameraresolutionvalue"
     const val CAMERA_DEFAULT_BACK = "cameradefaultback"
     const val CAMERA_KEEP_ZOOM = "camerakeepzoom"
+    const val ROUND_VIDEO_FIX = "roundvideofix"
 
     const val FOLDER_ICONS = "foldericons"
     const val FOLDER_TAB_DISPLAY_MODE = "foldertabdisplay"

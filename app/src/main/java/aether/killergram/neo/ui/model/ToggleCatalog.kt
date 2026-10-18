@@ -252,6 +252,12 @@ object ToggleCatalog {
                     key = PreferenceKeys.CAMERA_KEEP_ZOOM,
                     description = "Prevents zoom from resetting to 1x when you lift your fingers during recording.",
                     icon = ToggleIcon.ZOOM_IN
+                ),
+                ModuleToggle(
+                    title = "Fix video note sync and frame rate",
+                    key = PreferenceKeys.ROUND_VIDEO_FIX,
+                    description = "Keeps sound in sync with the picture once the phone has slept, and records video notes at a steady 30 fps on Camera1 and Camera2.",
+                    icon = ToggleIcon.VIDEOCAM
                 )
             )
         ),

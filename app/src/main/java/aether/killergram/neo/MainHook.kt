@@ -7,6 +7,7 @@ import aether.killergram.neo.hooks.cameraDefaultBack
 import aether.killergram.neo.hooks.cameraHigherBitrate
 import aether.killergram.neo.hooks.cameraHigherResolution
 import aether.killergram.neo.hooks.cameraKeepZoom
+import aether.killergram.neo.hooks.fixRoundVideoRecording
 import aether.killergram.neo.hooks.forceAllowForwards
 import aether.killergram.neo.hooks.forceSystemTypeface
 import aether.killergram.neo.hooks.addSettingsEntry
@@ -100,7 +101,8 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
             PreferenceKeys.FORCE_SYSTEM_TYPEFACE to { hooks.forceSystemTypeface() },
             PreferenceKeys.HIDE_PHONE_NUMBER to { hooks.hidePhoneNumber() },
             PreferenceKeys.CAMERA_DEFAULT_BACK to { hooks.cameraDefaultBack() },
-            PreferenceKeys.CAMERA_KEEP_ZOOM to { hooks.cameraKeepZoom() }
+            PreferenceKeys.CAMERA_KEEP_ZOOM to { hooks.cameraKeepZoom() },
+            PreferenceKeys.ROUND_VIDEO_FIX to { hooks.fixRoundVideoRecording() }
         )
 
         // Always-on entry point to the module settings from inside Telegram, so the
