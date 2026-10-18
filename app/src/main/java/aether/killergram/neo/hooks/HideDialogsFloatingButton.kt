@@ -114,7 +114,7 @@ private fun Hooks.hideObfuscatedDialogsFloatingButtons() {
 }
 
 /** The main chat list is the instance created by the bottom tabs screen. */
-private fun isMainChatList(fragment: Any): Boolean {
+internal fun isMainChatList(fragment: Any): Boolean {
     val arguments = runCatching {
         XposedHelpers.callMethod(fragment, "getArguments") as? Bundle
     }.getOrNull()

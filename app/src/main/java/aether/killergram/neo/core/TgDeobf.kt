@@ -241,6 +241,34 @@ object TgDeobf {
     }
 
     /**
+     * ChatActivity.maybePlayVisibleVideo(): on a volume key press LaunchActivity's
+     * dispatchKeyEvent asks the open chat to start the visible video with sound. It is the
+     * no-arg boolean method dispatchKeyEvent calls that also calls
+     * SharedConfig.setNoSoundHintShowed.
+     */
+    fun volumeKeyVideoPlayback(lpparam: LoadPackageParam): Method? =
+        cachedMethod(lpparam, KEY_VOLUME_VIDEO, "ChatActivity.maybePlayVisibleVideo") { bridge ->
+            bridge.findMethod {
+                matcher {
+                    returnType("boolean")
+                    paramCount(0)
+                    invokeMethods {
+                        add {
+                            declaredClass("org.telegram.messenger.SharedConfig")
+                            name("setNoSoundHintShowed")
+                        }
+                    }
+                    callerMethods {
+                        add {
+                            declaredClass("org.telegram.ui.LaunchActivity")
+                            name("dispatchKeyEvent")
+                        }
+                    }
+                }
+            }
+        }
+
+    /**
      * DialogsActivity.createView(Context): the chat list screen, the only createView that
      * reads R.drawable.outline_fab_story_24 (the story camera floating button).
      */
@@ -535,6 +563,7 @@ object TgDeobf {
     private const val KEY_MAIN_TABS = "mainTabs"
     private const val KEY_HAS_STORIES = "hasStories"
     private const val KEY_DIALOGS_CREATE_VIEW = "dialogsCreateView"
+    private const val KEY_VOLUME_VIDEO = "volumeVideo"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
