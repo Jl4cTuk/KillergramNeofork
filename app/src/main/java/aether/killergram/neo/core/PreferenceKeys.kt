@@ -23,8 +23,6 @@ object PreferenceKeys {
     const val DISABLE_AUTO_AUDIO = "volume"
     const val FORCE_SYSTEM_TYPEFACE = "typeface"
     const val HIDE_APP_UPDATES = "hideupdates"
-    const val CUSTOMIZE_HAMBURGER_MENU = "customhamburgermenu"
-    const val HIDDEN_HAMBURGER_MENU_ITEMS = "hiddenhamburgermenuitems"
     const val FORCE_LOCAL_PREMIUM = "localpremium"
     const val KEEP_DELETED_MESSAGES = "deleted"
     const val UNLIMITED_RECENTS = "unlimitedrecents"
@@ -41,10 +39,7 @@ object PreferenceKeys {
     const val CAMERA_DEFAULT_BACK = "cameradefaultback"
     const val CAMERA_KEEP_ZOOM = "camerakeepzoom"
     const val ROUND_VIDEO_FIX = "roundvideofix"
-
-    const val FOLDER_ICONS = "foldericons"
-    const val FOLDER_TAB_DISPLAY_MODE = "foldertabdisplay"
-    const val FOLDER_TAB_SMALLER_ICONS = "foldertabsmallicons"
+    const val HIDE_CONTACTS_TAB = "hidecontactstab"
 
     const val REPLACE_APP_TITLE = "replaceapptitle"
     const val APP_TITLE_MODE = "apptitlemode"

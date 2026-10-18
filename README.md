@@ -28,11 +28,9 @@ To use Killergram Neo, you need:
 #### Navigation
 * Hide stories
 * Hide the floating create button in the chat list
-* Hide selected entries from the hamburger menu
 * Hide the channel action bar (mute/discussion/gifts/join)
 * Hide the side share button on channel posts
 * Hide the keyboard when scrolling chats
-* Add folder icons and choose how folder tabs are displayed
 
 #### Camera
 * Increase video note bitrate

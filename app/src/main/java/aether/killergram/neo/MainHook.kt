@@ -15,7 +15,7 @@ import aether.killergram.neo.hooks.hideTopics
 import aether.killergram.neo.hooks.hideChannelBottomBar
 import aether.killergram.neo.hooks.hideAppUpdates
 import aether.killergram.neo.hooks.hideDialogsFloatingButton
-import aether.killergram.neo.hooks.hideHamburgerMenuButtons
+import aether.killergram.neo.hooks.hideContactsTab
 import aether.killergram.neo.hooks.hideInputBoxButtons
 import aether.killergram.neo.hooks.hideKeyboardOnScroll
 import aether.killergram.neo.hooks.hidePaidStarReactions
@@ -32,12 +32,10 @@ import aether.killergram.neo.hooks.noRounding
 import aether.killergram.neo.hooks.defaultHdMediaSending
 import aether.killergram.neo.hooks.disableNotificationDelay
 import aether.killergram.neo.hooks.disableAttachCameraPreview
-import aether.killergram.neo.hooks.folderIcons
 import aether.killergram.neo.hooks.replaceAppTitle
 import aether.killergram.neo.hooks.unlimitedRecents
 import aether.killergram.neo.hooks.showTimestampSeconds
 import aether.killergram.neo.hooks.videoNoteSizeGuard
-import android.content.res.XModuleResources
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam
@@ -45,15 +43,13 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 
 class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
-    private var moduleResources: XModuleResources? = null
     private val prefs = PreferencesUtils().getPrefsInstance()
     private val packageBlocklist = arrayOf(  // Apparently sometimes LSPosed will just hook us into random crap like GMS or ourselves
             BuildConfig.APPLICATION_ID,      // This is supposed to solve this problem
             "com.google.android.gms"
         )
     override fun initZygote(startupParam: StartupParam?) {
-        this.moduleResources = XModuleResources.createInstance(startupParam!!.modulePath, null)
-        modulePath = startupParam.modulePath
+        modulePath = startupParam?.modulePath
     }
 
     companion object {
@@ -90,7 +86,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             PreferenceKeys.DISABLE_NOTIFICATION_DELAY to { hooks.disableNotificationDelay() },
             PreferenceKeys.DISABLE_AUTO_AUDIO to { hooks.killAutoAudio() },
             PreferenceKeys.HIDE_APP_UPDATES to { hooks.hideAppUpdates() },
-            PreferenceKeys.CUSTOMIZE_HAMBURGER_MENU to { hooks.hideHamburgerMenuButtons() },
+            PreferenceKeys.HIDE_CONTACTS_TAB to { hooks.hideContactsTab() },
             PreferenceKeys.CUSTOMIZE_INPUT_BOX_BUTTONS to { hooks.hideInputBoxButtons() },
             PreferenceKeys.KEEP_DELETED_MESSAGES to { hooks.keepDeletedMessages() },
             PreferenceKeys.DISABLE_ROUNDING to { hooks.noRounding() },
@@ -136,12 +132,6 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             hooks.videoNoteSizeGuard()
         }
 
-        if (prefs.getBoolean(PreferenceKeys.FOLDER_ICONS, false) && moduleResources != null) {
-            val displayMode = prefs.getStringSet(PreferenceKeys.FOLDER_TAB_DISPLAY_MODE, setOf("icon"))
-                ?.firstOrNull() ?: "icon"
-            val useSmallerIcons = prefs.getBoolean(PreferenceKeys.FOLDER_TAB_SMALLER_ICONS, false)
-            hooks.folderIcons(moduleResources!!, displayMode, useSmallerIcons)
-        }
 
         if (prefs.getBoolean(PreferenceKeys.REPLACE_APP_TITLE, false)) {
             val mode = prefs.getStringSet(PreferenceKeys.APP_TITLE_MODE, setOf("firstname"))

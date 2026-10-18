@@ -1,18 +1,9 @@
 package aether.killergram.neo.ui.model
 
-import aether.killergram.neo.core.HamburgerMenuItems
 import aether.killergram.neo.core.InputBoxButtons
 import aether.killergram.neo.core.PreferenceKeys
 
 object ToggleCatalog {
-    private val hamburgerMenuChoices = HamburgerMenuItems.all.map { item ->
-        ToggleChoiceOption(
-            value = item.value,
-            title = item.fallbackTitle,
-            description = item.description,
-            resourceNames = item.resourceNames
-        )
-    }
     private val inputBoxButtonChoices = InputBoxButtons.all.map { button ->
         ToggleChoiceOption(
             value = button.value,
@@ -105,20 +96,10 @@ object ToggleCatalog {
                     icon = ToggleIcon.ADD_BOX_OFF
                 ),
                 ModuleToggle(
-                    title = "Customize hamburger menu buttons",
-                    key = PreferenceKeys.CUSTOMIZE_HAMBURGER_MENU,
-                    description = "Choose which entries Telegram should hide from the left hamburger menu. In Telegram 12.2+ \"Contacts\" also hides the Contacts tab of the bottom bar.",
-                    icon = ToggleIcon.MENU,
-                    parameters = listOf(
-                        ToggleParameter(
-                            key = PreferenceKeys.HIDDEN_HAMBURGER_MENU_ITEMS,
-                            title = "Hidden menu buttons",
-                            description = "Names are loaded from the target app when possible so they match Telegram exactly.",
-                            type = ToggleParameterType.CHOICE,
-                            choiceOptions = hamburgerMenuChoices,
-                            allowMultiple = true
-                        )
-                    )
+                    title = "Hide Contacts tab",
+                    key = PreferenceKeys.HIDE_CONTACTS_TAB,
+                    description = "Hides the Contacts tab from the bottom bar (Telegram 12.2+).",
+                    icon = ToggleIcon.MENU
                 ),
                 ModuleToggle(
                     title = "Hide channel action bar",
@@ -151,32 +132,6 @@ object ToggleCatalog {
                             type = ToggleParameterType.CHOICE,
                             choiceOptions = inputBoxButtonChoices,
                             allowMultiple = true
-                        )
-                    )
-                ),
-                ModuleToggle(
-                    title = "Folder icons",
-                    key = PreferenceKeys.FOLDER_ICONS,
-                    description = "Adds an icon picker to the folder editor and shows folder icons in the tab bar.",
-                    icon = ToggleIcon.FOLDER,
-                    parameters = listOf(
-                        ToggleParameter(
-                            key = PreferenceKeys.FOLDER_TAB_DISPLAY_MODE,
-                            title = "Tab display mode",
-                            description = "How folders appear in the tab bar.",
-                            type = ToggleParameterType.CHOICE,
-                            choiceOptions = listOf(
-                                ToggleChoiceOption("icon", "Icons only"),
-                                ToggleChoiceOption("mix", "Icons with text"),
-                                ToggleChoiceOption("text", "Text only")
-                            ),
-                            defaultChoiceValues = setOf("icon")
-                        ),
-                        ToggleParameter(
-                            key = PreferenceKeys.FOLDER_TAB_SMALLER_ICONS,
-                            title = "Smaller tab icons",
-                            description = "Reduces folder tab icons to 90% of their normal size.",
-                            type = ToggleParameterType.BOOLEAN
                         )
                     )
                 )
