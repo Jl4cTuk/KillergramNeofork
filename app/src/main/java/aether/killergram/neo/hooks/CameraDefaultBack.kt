@@ -6,14 +6,10 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
+private const val CAMERA2_SESSION = "org.telegram.messenger.camera.Camera2Session"
+
 private const val FORCE_REAR_ON_NEXT_INSTANT_CAMERA_INIT =
     "killergramneo_force_rear_on_next_instant_camera_init"
-
-// Set while InstantCameraView is opening a fresh round-video camera, so the
-// Camera2 "dual" preference read can be forced off for that window only.
-private val roundVideoOpening = ThreadLocal.withInitial { false }
-
-private const val ROUNDDUAL_PREF_KEY = "rounddual_available"
 
 fun Hooks.cameraDefaultBack() {
     log("Setting default camera to rear...")
@@ -38,31 +34,6 @@ fun Hooks.cameraDefaultBack() {
         }.onFailure {
             log("Failed to hook CameraView constructors: ${it.message}", "ERROR")
         }
-    }
-
-    // Force the Camera2 round-video path off "dual" while a fresh round camera opens,
-    // so Telegram takes the single-session path and creates the rear lens (create(false)).
-    // The key is read from the global SharedPreferences during InstantCameraView.showCamera().
-    runCatching {
-        val prefsImpl = XposedHelpers.findClass(
-            "android.app.SharedPreferencesImpl",
-            lpparam.classLoader
-        )
-        XposedHelpers.findAndHookMethod(
-            prefsImpl,
-            "getBoolean",
-            String::class.java,
-            java.lang.Boolean.TYPE,
-            object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (roundVideoOpening.get() == true && param.args[0] == ROUNDDUAL_PREF_KEY) {
-                        param.result = false
-                    }
-                }
-            }
-        )
-    }.onFailure {
-        log("Failed to hook SharedPreferencesImpl.getBoolean: ${it.message}", "DEBUG")
     }
 
     // Telegram 13's new round-video recorder (the "Camera2" round video option) does not
@@ -102,8 +73,20 @@ fun Hooks.cameraDefaultBack() {
     val instantCameraClass =
         XposedHelpers.findClassIfExists(ic.className, lpparam.classLoader) ?: return
 
-    // showCamera(fromPaused): arm the rear override for a fresh open (fromPaused == false)
-    // and mark the round-video open window so the dual-pref read above is forced off.
+    // Dual Camera2 mode opens both lenses at once: session 0 (front) renders to GL surface
+    // 0, session 1 (back) to surface 1, and the renderer shows the surface in this index.
+    val sessionsField = instantCameraClass.declaredFields
+        .firstOrNull { it.type.isArray && it.type.componentType?.name == CAMERA2_SESSION }
+        ?.apply { isAccessible = true }
+    val surfaceIndexField = TgDeobf.roundCameraSurfaceIndex(lpparam, instantCameraClass)
+
+    // showCamera(fromPaused), fresh open (fromPaused == false):
+    // - Camera2: showCamera keeps the frontface flag from the last recording and picks the
+    //   active session by it. Clearing the flag starts on the rear lens. In dual mode the
+    //   renderer's surface index is then pointed at the back surface, which is exactly the
+    //   state Telegram leaves after a switch, so switching to the front lens mid-recording
+    //   stays seamless (no session restart).
+    // - Camera1: showCamera resets the flag to front itself; arm initCamera to clear it.
     runCatching {
         XposedBridge.hookAllMethods(
             instantCameraClass,
@@ -112,12 +95,14 @@ fun Hooks.cameraDefaultBack() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val fromPaused = param.args.firstOrNull() as? Boolean
                     if (fromPaused == false) {
+                        runCatching {
+                            XposedHelpers.setBooleanField(param.thisObject, ic.frontface, false)
+                        }
                         XposedHelpers.setAdditionalInstanceField(
                             param.thisObject,
                             FORCE_REAR_ON_NEXT_INSTANT_CAMERA_INIT,
                             true
                         )
-                        roundVideoOpening.set(true)
                     } else {
                         XposedHelpers.removeAdditionalInstanceField(
                             param.thisObject,
@@ -127,7 +112,16 @@ fun Hooks.cameraDefaultBack() {
                 }
 
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    roundVideoOpening.set(false)
+                    if (param.args.firstOrNull() as? Boolean != false) return
+                    runCatching {
+                        val sessions = sessionsField?.get(param.thisObject) as? Array<*> ?: return
+                        val dual = sessions.size >= 2 && sessions[0] != null && sessions[1] != null
+                        if (!dual || surfaceIndexField == null) return
+                        val front = XposedHelpers.getBooleanField(param.thisObject, ic.frontface)
+                        surfaceIndexField.setInt(param.thisObject, if (front) 0 else 1)
+                    }.onFailure {
+                        log("Failed to align dual camera surface: ${it.message}", "DEBUG")
+                    }
                 }
             }
         )
@@ -135,10 +129,9 @@ fun Hooks.cameraDefaultBack() {
         log("Failed to hook InstantCameraView.showCamera: ${it.message}", "ERROR")
     }
 
-    // initCamera(): runs inside showCamera right after the front default is applied.
-    // When armed (fresh open), flip the frontface flag to false so it selects rear.
-    // This covers Camera1 and the single-session Camera2 path. Switching cameras goes
-    // through a different path and is left untouched.
+    // initCamera(): runs inside showCamera right after the Camera1 front default is
+    // applied. When armed (fresh open), flip the frontface flag to false so it selects
+    // rear. Switching cameras goes through a different path and is left untouched.
     runCatching {
         XposedBridge.hookAllMethods(
             instantCameraClass,
