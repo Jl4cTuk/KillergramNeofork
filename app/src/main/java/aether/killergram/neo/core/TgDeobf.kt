@@ -8,6 +8,7 @@ import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.UsingType
 import org.luckypray.dexkit.result.MethodData
 import java.io.File
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 
 /**
@@ -159,6 +160,97 @@ object TgDeobf {
                     paramTypes("android.content.Context")
                     returnType("android.view.View")
                     addUsingField("Lorg/telegram/messenger/R\$string;->MainTabsContacts:I", UsingType.Read)
+                }
+            }
+        }
+
+    /**
+     * InstantCameraView's current GL surface index (0 = front session, 1 = back session
+     * when both lenses are opened at once). The GL renderer flips it on a camera switch,
+     * in the method that logs "GL surface flip applied: surface=".
+     */
+    fun roundCameraSurfaceIndex(lpparam: LoadPackageParam, cameraClass: Class<*>): Field? {
+        if (cache.containsKey(KEY_ROUND_SURFACE_INDEX)) return cache[KEY_ROUND_SURFACE_INDEX] as Field?
+
+        val resolved = runCatching {
+            withBridge(lpparam) { bridge ->
+                bridge.findField {
+                    matcher {
+                        declaredClass(cameraClass.name)
+                        type("int")
+                        writeMethods {
+                            add { usingStrings("GL surface flip applied: surface=") }
+                        }
+                    }
+                }.singleOrNull()?.getFieldInstance(lpparam.classLoader)
+            }?.apply { isAccessible = true }
+        }.onFailure {
+            log("Round camera surface index resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+
+        cache[KEY_ROUND_SURFACE_INDEX] = resolved
+        if (resolved != null) {
+            log("Resolved round camera surface index: ${resolved.name}", "DEBUG")
+        } else {
+            log("Failed to resolve round camera surface index", "ERROR")
+        }
+        return resolved
+    }
+
+    /**
+     * Frame-available handlers of Telegram's camera video encoders, (SurfaceTexture,
+     * Integer, long), which stamp each camera frame with SurfaceTexture.getTimestamp():
+     * the round-video one (obfuscated) and CameraView's video recorder (kept).
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun cameraFrameHandlers(lpparam: LoadPackageParam): List<Method> {
+        if (cache.containsKey(KEY_ROUND_FRAME_TIMESTAMP)) {
+            return cache[KEY_ROUND_FRAME_TIMESTAMP] as List<Method>
+        }
+
+        val resolved = runCatching {
+            withBridge(lpparam) { bridge ->
+                bridge.findMethod {
+                    matcher {
+                        returnType("void")
+                        paramTypes("android.graphics.SurfaceTexture", "java.lang.Integer", "long")
+                        invokeMethods {
+                            add {
+                                declaredClass("android.graphics.SurfaceTexture")
+                                name("getTimestamp")
+                            }
+                        }
+                    }
+                }.map { it.getMethodInstance(lpparam.classLoader).apply { isAccessible = true } }
+            }
+        }.onFailure {
+            log("Camera frame handler resolution failed: ${it.message}", "ERROR")
+        }.getOrNull().orEmpty()
+
+        cache[KEY_ROUND_FRAME_TIMESTAMP] = resolved
+        if (resolved.isNotEmpty()) {
+            log(
+                "Resolved camera frame handlers: " +
+                    resolved.joinToString { "${it.declaringClass.name}.${it.name}" },
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve camera frame handlers", "ERROR")
+        }
+        return resolved
+    }
+
+    /**
+     * DialogsActivity.createView(Context): the chat list screen, the only createView that
+     * reads R.drawable.outline_fab_story_24 (the story camera floating button).
+     */
+    fun dialogsCreateView(lpparam: LoadPackageParam): Method? =
+        cachedMethod(lpparam, KEY_DIALOGS_CREATE_VIEW, "DialogsActivity.createView") { bridge ->
+            bridge.findMethod {
+                matcher {
+                    paramTypes("android.content.Context")
+                    returnType("android.view.View")
+                    addUsingField("Lorg/telegram/messenger/R\$drawable;->outline_fab_story_24:I", UsingType.Read)
                 }
             }
         }
@@ -442,6 +534,9 @@ object TgDeobf {
     private const val KEY_MEASURE_TIME = "measureTime"
     private const val KEY_MAIN_TABS = "mainTabs"
     private const val KEY_HAS_STORIES = "hasStories"
+    private const val KEY_DIALOGS_CREATE_VIEW = "dialogsCreateView"
+    private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
+    private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
     private const val APPLICATION_LOADER = "org.telegram.messenger.ApplicationLoader"
 }

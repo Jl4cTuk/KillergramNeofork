@@ -2,7 +2,6 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
-import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
 import android.view.View
@@ -146,9 +145,16 @@ fun Hooks.hideTopics() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val fragment = param.thisObject ?: return
                 val cell = param.args.getOrNull(0) ?: return
-                val topic = findTopicIn(cell, topicClass) ?: return
-                val chatId = topicChats[topic] ?: chatIdFromTopMessage(topic) ?: return
+                val topic = findTopicIn(cell, topicClass) ?: run {
+                    log("Topic selection: no topic in ${cell.javaClass.name}", "DEBUG")
+                    return
+                }
+                val chatId = topicChats[topic] ?: chatIdFromTopMessage(topic) ?: run {
+                    log("Topic selection: chat id unknown for topic ${topicId(topic)}", "DEBUG")
+                    return
+                }
                 if (!ensureStore()) return
+                log("Topic selection: chat $chatId topic ${topicId(topic)}", "DEBUG")
                 runCatching {
                     updateSelectionButtons(fragment, chatId, loader)
                 }.onFailure {
@@ -175,8 +181,12 @@ fun Hooks.hideTopics() {
 
             val chatId = topicChats[topic]
                 ?: chatIdFromTopMessage(topic)
-                ?: return
+                ?: run {
+                    log("Topic menu: chat id unknown for topic ${topicId(topic)}", "DEBUG")
+                    return
+                }
             val id = topicId(topic) ?: return
+            log("Topic menu: chat $chatId topic $id", "DEBUG")
             if (!ensureStore()) return
             XposedHelpers.setAdditionalInstanceField(options, MENU_MARKER, true)
 
@@ -228,31 +238,43 @@ private const val TAG_SHOW_BUTTON = "killergramneo_show_hidden_topics"
  * copy the look of a neighbouring action item, so no obfuscated menu API is needed.
  */
 private fun updateSelectionButtons(fragment: Any, chatId: Long, loader: ClassLoader) {
-    val counter = fragment.javaClass.declaredFields
+    val counter = fieldsOf(fragment.javaClass)
         .firstOrNull { it.type.name == "org.telegram.ui.Components.NumberTextView" }
         ?.apply { isAccessible = true }
-        ?.get(fragment) as? View ?: return
-    val menu = counter.parent as? ViewGroup ?: return
+        ?.get(fragment) as? View ?: run {
+            log("Topic selection: no selection counter in ${fragment.javaClass.name}", "DEBUG")
+            return
+        }
+    val menu = counter.parent as? ViewGroup ?: run {
+        log("Topic selection: selection counter is not in a menu", "DEBUG")
+        return
+    }
     val ru = isRussian(menu.context)
 
     val hideButton = menu.findViewWithTag(TAG_HIDE_BUTTON)
         ?: addActionButton(menu, TAG_HIDE_BUTTON, "msg_archive_hide",
-            if (ru) "Скрыть топики" else "Hide topics") ?: return
+            if (ru) "Скрыть топики" else "Hide topics")
+        ?: run {
+            log("Topic selection: could not add hide button", "DEBUG")
+            return
+        }
     val showButton = menu.findViewWithTag(TAG_SHOW_BUTTON)
         ?: addActionButton(menu, TAG_SHOW_BUTTON, "msg_archive_show",
             if (ru) "Показать скрытые топики" else "Show hidden topics") ?: return
 
-    hideButton.setOnClickListener { view ->
+    // Leave the selection before reloading the list: the reload drops the selection on
+    // its own, after which the screen's back handling would close it instead.
+    hideButton.setOnClickListener {
         val selected = selectedTopicIds(fragment)
         selected.forEach { HiddenTopics.hide(chatId, it) }
+        leaveSelectionMode(fragment)
         notifyTopicsChanged(loader, chatId)
-        leaveSelectionMode(view)
     }
     showButton.visibility = if (HiddenTopics.countHidden(chatId) > 0) View.VISIBLE else View.GONE
-    showButton.setOnClickListener { view ->
+    showButton.setOnClickListener {
         HiddenTopics.unhideAll(chatId)
+        leaveSelectionMode(fragment)
         notifyTopicsChanged(loader, chatId)
-        leaveSelectionMode(view)
     }
 }
 
@@ -292,9 +314,19 @@ private fun addActionButton(menu: ViewGroup, tag: String, iconName: String, labe
     return button
 }
 
+/**
+ * Fields of [cls] and its superclasses. Telegram opens the topics list through subclasses
+ * of the list screen (e.g. from the chat list), so its fields may be inherited.
+ */
+private fun fieldsOf(cls: Class<*>): List<java.lang.reflect.Field> =
+    generateSequence(cls) { it.superclass }
+        .takeWhile { it != Any::class.java }
+        .flatMap { it.declaredFields.asSequence() }
+        .toList()
+
 @Suppress("UNCHECKED_CAST")
 private fun selectedTopicIds(fragment: Any): List<Int> {
-    for (field in fragment.javaClass.declaredFields) {
+    for (field in fieldsOf(fragment.javaClass)) {
         if (!Set::class.java.isAssignableFrom(field.type)) continue
         field.isAccessible = true
         val set = field.get(fragment) as? Set<Any?> ?: continue
@@ -303,8 +335,15 @@ private fun selectedTopicIds(fragment: Any): List<Int> {
     return emptyList()
 }
 
-private fun leaveSelectionMode(view: View) {
-    runCatching { (view.context as? Activity)?.onBackPressed() }
+/**
+ * Clears the selection through the topics screen's own back handling, which only clears
+ * the selection while topics are selected. Once the selection is empty (Telegram drops it
+ * when the topic list reloads), a back press would close the screen or the whole app, so
+ * nothing is done then.
+ */
+private fun leaveSelectionMode(fragment: Any) {
+    if (selectedTopicIds(fragment).isEmpty()) return
+    runCatching { XposedHelpers.callMethod(fragment, "onBackPressed", true) }
         .onFailure { log("Failed to leave topic selection: ${it.message}", "DEBUG") }
 }
 
