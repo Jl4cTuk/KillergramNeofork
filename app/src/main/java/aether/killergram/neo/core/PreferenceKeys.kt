@@ -4,8 +4,6 @@ object PreferenceKeys {
     const val PREFS_NAME = "function_switches"
 
     const val DEBUG_LOGGING = "debug"
-    const val SOLAR_ICONS = "solar"
-    const val ADAPTIVE_MONET_THEMES = "adaptivemonetthemes"
     const val HIDE_STORIES = "stories"
     const val HIDE_TOPICS = "hidetopics"
     const val EDITED_ICON = "editedicon"

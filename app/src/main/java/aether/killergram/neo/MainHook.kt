@@ -23,7 +23,6 @@ import aether.killergram.neo.hooks.hidePhoneNumber
 import aether.killergram.neo.hooks.hidePostShareButton
 import aether.killergram.neo.hooks.showProfileUserId
 import aether.killergram.neo.hooks.replaceEditedLabelWithIcon
-import aether.killergram.neo.hooks.injectAdaptiveMonetThemes
 import aether.killergram.neo.hooks.keepDeletedMessages
 import aether.killergram.neo.hooks.killAutoAudio
 import aether.killergram.neo.hooks.killSponsoredMessages
@@ -39,15 +38,13 @@ import aether.killergram.neo.hooks.unlimitedRecents
 import aether.killergram.neo.hooks.showTimestampSeconds
 import aether.killergram.neo.hooks.videoNoteSizeGuard
 import android.content.res.XModuleResources
-import de.robv.android.xposed.IXposedHookInitPackageResources
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam
-import de.robv.android.xposed.callbacks.XC_InitPackageResources
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 
-class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitPackageResources {
+class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     private var moduleResources: XModuleResources? = null
     private val prefs = PreferencesUtils().getPrefsInstance()
     private val packageBlocklist = arrayOf(  // Apparently sometimes LSPosed will just hook us into random crap like GMS or ourselves
@@ -93,7 +90,6 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
             PreferenceKeys.DISABLE_NOTIFICATION_DELAY to { hooks.disableNotificationDelay() },
             PreferenceKeys.DISABLE_AUTO_AUDIO to { hooks.killAutoAudio() },
             PreferenceKeys.HIDE_APP_UPDATES to { hooks.hideAppUpdates() },
-            PreferenceKeys.ADAPTIVE_MONET_THEMES to { hooks.injectAdaptiveMonetThemes() },
             PreferenceKeys.CUSTOMIZE_HAMBURGER_MENU to { hooks.hideHamburgerMenuButtons() },
             PreferenceKeys.CUSTOMIZE_INPUT_BOX_BUTTONS to { hooks.hideInputBoxButtons() },
             PreferenceKeys.KEEP_DELETED_MESSAGES to { hooks.keepDeletedMessages() },
@@ -156,46 +152,5 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit, IXposedHookInitP
         }
 
         TgDeobf.release()
-    }
-
-    override fun handleInitPackageResources(resparam: XC_InitPackageResources.InitPackageResourcesParam?) {
-        if (resparam?.packageName == null || packageBlocklist.contains(resparam.packageName)) {
-            return
-        }
-        if (moduleResources == null) {
-            log("Can't find module resources!", "ERROR")
-            return
-        }
-
-        if (prefs.getBoolean(PreferenceKeys.SOLAR_ICONS, false)) {
-            log("Injecting Solar icons...")
-
-            val drawablesJavaClassSelf = R.drawable::class.java
-            val drawablesSelf = drawablesJavaClassSelf.declaredFields
-            
-            var totalAttempts = 0
-            var successfulReplacements = 0
-            for (field in drawablesSelf) {
-                val resourceIdSelf: Int
-                try {
-                    resourceIdSelf = field.getInt(drawablesJavaClassSelf)
-                } catch (e: Exception) {
-                    continue
-                }
-                try {
-                    if (field.name.contains("solar")) {
-                        totalAttempts++
-                        resparam.res.setReplacement(resparam.packageName,
-                            "drawable",
-                            field.name.replace("_solar", ""),
-                            moduleResources!!.fwd(resourceIdSelf))
-                        successfulReplacements++
-                    }
-                } catch (e: Exception) {
-                    continue
-                }
-            }
-            log("Succeeded $successfulReplacements, failed ${totalAttempts - successfulReplacements}", "SOLAR")
-        }
     }
 }

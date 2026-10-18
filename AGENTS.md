@@ -20,7 +20,7 @@ Preferences bridge the two processes: the UI writes them, the hooks read them at
 
 ### Package Layout (`app/src/main/java/aether/killergram/neo/`)
 
-- **`MainHook.kt`** — Entry point for Xposed. Implements `IXposedHookLoadPackage`, `IXposedHookZygoteInit`, `IXposedHookInitPackageResources`. Reads prefs and conditionally invokes each hook.
+- **`MainHook.kt`** — Entry point for Xposed. Implements `IXposedHookLoadPackage` and `IXposedHookZygoteInit`. Reads prefs and conditionally invokes each hook.
 - **`hooks/`** — Each feature is a separate file defining an **extension function on `Hooks`** (e.g., `fun Hooks.killStories()`). The `Hooks` class wraps `LoadPackageParam` and provides `loadClass()` for safe class resolution.
 - **`hooks/Hooks.kt`** — Thin wrapper around `LoadPackageParam` with logged class loading.
 - **`ui/`** — Jetpack Compose UI: screens, components, theme, navigation. Uses Material3 with bottom nav (Features / Settings tabs).
@@ -47,10 +47,6 @@ Official Telegram builds are R8-obfuscated since 12.10.2. `org.telegram.ui.*` cl
 ### Settings entry and launcher icon
 
 `hooks/SettingsEntry.kt` always adds a "Killergram" item to Telegram's chat list "⋮" menu that opens `MainActivity`. `MainActivity` also declares `de.robv.android.xposed.category.MODULE_SETTINGS`, so the module list in Vector can open it. The launcher icon is the `.LauncherAlias` activity-alias, which the "Hide launcher icon" setting disables. Keep the module free of requested permissions (`<queries>` instead of `QUERY_ALL_PACKAGES`; androidx's `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` is removed), otherwise Android shows an App info stub in place of the hidden icon.
-
-### Resource Replacement (Solar Icons)
-
-Icon injection works differently from code hooks — it uses `IXposedHookInitPackageResources` in `MainHook`. Drawable resources with a `_solar` suffix in the module replace matching drawables (minus the suffix) in the target app.
 
 ## Key Technical Details
 

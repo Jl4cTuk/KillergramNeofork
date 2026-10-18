@@ -19,8 +19,6 @@ To use Killergram Neo, you need:
 * An **Xposed API provider** - we recommend [Vector](https://github.com/JingMatrix/Vector) 
 ## Features
 #### Appearance
-* Replace in-app icons with the **Solar pack** by [@Design480](https://t.me/Design480)
-* Add adaptive **Monet Light** and **Monet Dark** themes to Telegram's theme picker
 * Force system fonts
 * Replace the `edited` label with a monochrome pencil icon
 * Show seconds in timestamps (`HH:mm:ss`)

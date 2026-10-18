@@ -26,18 +26,6 @@ object ToggleCatalog {
             title = "Appearance",
             toggles = listOf(
                 ModuleToggle(
-                    title = "Inject Solar icons",
-                    key = PreferenceKeys.SOLAR_ICONS,
-                    description = "Replaces default icons with the Solar pack by @Design480.",
-                    icon = ToggleIcon.PALETTE
-                ),
-                ModuleToggle(
-                    title = "Add adaptive Monet themes",
-                    key = PreferenceKeys.ADAPTIVE_MONET_THEMES,
-                    description = "Adds Android 12+ Monet Light and Monet Dark to Telegram's own theme picker and refreshes them when the system palette changes.",
-                    icon = ToggleIcon.PALETTE
-                ),
-                ModuleToggle(
                     title = "Force system fonts",
                     key = PreferenceKeys.FORCE_SYSTEM_TYPEFACE,
                     description = "Uses your system typeface instead of Telegram defaults.",

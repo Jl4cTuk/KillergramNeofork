@@ -31,7 +31,7 @@ fun log(message: String, level: String = "") {
     if (level == "") {
         XposedBridge.log("$tag $message")
         Log.i(tag, message)
-    } else if ((level == "DEBUG" || level == "SOLAR") && debugLogging) {
+    } else if (level == "DEBUG" && debugLogging) {
         XposedBridge.log("$tag-[DEBUG] $message")
         Log.d(tag, message)
     } else if (level == "ERROR") {
