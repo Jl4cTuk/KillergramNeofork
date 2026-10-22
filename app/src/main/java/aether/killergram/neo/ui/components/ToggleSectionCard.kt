@@ -36,9 +36,7 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Hd
-import androidx.compose.material.icons.outlined.KeyboardHide
 import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material.icons.outlined.PhoneDisabled
 import androidx.compose.material.icons.outlined.RestorePage
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
@@ -239,14 +237,12 @@ private fun ToggleIcon.imageVector(): ImageVector {
         ToggleIcon.VOLUME_OFF -> Icons.AutoMirrored.Outlined.VolumeOff
         ToggleIcon.HD -> Icons.Outlined.Hd
         ToggleIcon.BLUR_ON -> Icons.Outlined.BlurOn
-        ToggleIcon.KEYBOARD_HIDE -> Icons.Outlined.KeyboardHide
         ToggleIcon.FONT_DOWNLOAD -> Icons.Outlined.TextFields
         ToggleIcon.SYSTEM_UPDATE_ALT -> Icons.Outlined.SystemUpdateAlt
         ToggleIcon.LABS -> Icons.Outlined.Science
         ToggleIcon.RESTORE_PAGE -> Icons.Outlined.RestorePage
         ToggleIcon.BUG_REPORT -> Icons.Outlined.BugReport
         ToggleIcon.HISTORY -> Icons.Outlined.History
-        ToggleIcon.PHONE_OFF -> Icons.Outlined.PhoneDisabled
         ToggleIcon.VIDEOCAM -> Icons.Outlined.Videocam
         ToggleIcon.CAMERA_REAR -> Icons.Outlined.CameraRear
         ToggleIcon.ZOOM_IN -> Icons.Outlined.ZoomIn

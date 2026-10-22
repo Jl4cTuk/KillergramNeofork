@@ -11,7 +11,6 @@ object PreferenceKeys {
     const val SHOW_USER_ID = "userid"
     const val DEFAULT_HD_MEDIA = "defaulthdmedia"
     const val DISABLE_ATTACH_CAMERA_PREVIEW = "attachcamerablur"
-    const val HIDE_KEYBOARD_ON_SCROLL = "hidekbonscroll"
     const val HIDE_DIALOGS_FAB = "hidedialogsfab"
     const val HIDE_PAID_STAR_REACTIONS = "hidepaidstarreactions"
     const val HIDE_CHANNEL_BOTTOM_BAR = "hidechannelbar"
@@ -28,9 +27,6 @@ object PreferenceKeys {
     const val UNLIMITED_RECENTS = "unlimitedrecents"
     const val RECENT_STICKERS_LIMIT = "recentstickerscount"
     const val RECENT_EMOJI_LIMIT = "recentemojicount"
-    const val HIDE_PHONE_NUMBER = "hidephonenumber"
-    const val CUSTOMIZE_INPUT_BOX_BUTTONS = "custominputboxbuttons"
-    const val HIDDEN_INPUT_BOX_BUTTONS = "hiddeninputboxbuttons"
 
     const val CAMERA_HIGHER_BITRATE = "camerahigherbitrate"
     const val CAMERA_BITRATE_VALUE = "camerabitratevalue"

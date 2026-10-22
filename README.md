@@ -30,7 +30,6 @@ To use Killergram Neo, you need:
 * Hide the floating create button in the chat list
 * Hide the channel action bar (mute/discussion/gifts/join)
 * Hide the side share button on channel posts
-* Hide the keyboard when scrolling chats
 
 #### Camera
 * Increase video note bitrate
@@ -46,7 +45,6 @@ To use Killergram Neo, you need:
 * Raise recent stickers and emoji limits
 
 #### Privacy & profile
-* Hide your phone number in Telegram UI
 * Show a copyable user ID on profile screens
 * Allow forwarding from anywhere*
 

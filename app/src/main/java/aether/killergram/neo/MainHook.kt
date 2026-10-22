@@ -17,10 +17,7 @@ import aether.killergram.neo.hooks.hideAppUpdates
 import aether.killergram.neo.hooks.hideDialogsFloatingButton
 import aether.killergram.neo.hooks.hideContactsTab
 import aether.killergram.neo.hooks.hideFolderDuplicates
-import aether.killergram.neo.hooks.hideInputBoxButtons
-import aether.killergram.neo.hooks.hideKeyboardOnScroll
 import aether.killergram.neo.hooks.hidePaidStarReactions
-import aether.killergram.neo.hooks.hidePhoneNumber
 import aether.killergram.neo.hooks.hidePostShareButton
 import aether.killergram.neo.hooks.showProfileUserId
 import aether.killergram.neo.hooks.replaceEditedLabelWithIcon
@@ -79,7 +76,6 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             PreferenceKeys.SHOW_USER_ID to { hooks.showProfileUserId() },
             PreferenceKeys.DEFAULT_HD_MEDIA to { hooks.defaultHdMediaSending() },
             PreferenceKeys.DISABLE_ATTACH_CAMERA_PREVIEW to { hooks.disableAttachCameraPreview() },
-            PreferenceKeys.HIDE_KEYBOARD_ON_SCROLL to { hooks.hideKeyboardOnScroll() },
             PreferenceKeys.HIDE_DIALOGS_FAB to { hooks.hideDialogsFloatingButton() },
             PreferenceKeys.HIDE_PAID_STAR_REACTIONS to { hooks.hidePaidStarReactions() },
             PreferenceKeys.HIDE_CHANNEL_BOTTOM_BAR to { hooks.hideChannelBottomBar() },
@@ -89,11 +85,9 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             PreferenceKeys.HIDE_APP_UPDATES to { hooks.hideAppUpdates() },
             PreferenceKeys.HIDE_CONTACTS_TAB to { hooks.hideContactsTab() },
             PreferenceKeys.HIDE_FOLDER_DUPLICATES to { hooks.hideFolderDuplicates() },
-            PreferenceKeys.CUSTOMIZE_INPUT_BOX_BUTTONS to { hooks.hideInputBoxButtons() },
             PreferenceKeys.KEEP_DELETED_MESSAGES to { hooks.keepDeletedMessages() },
             PreferenceKeys.DISABLE_ROUNDING to { hooks.noRounding() },
             PreferenceKeys.FORCE_SYSTEM_TYPEFACE to { hooks.forceSystemTypeface() },
-            PreferenceKeys.HIDE_PHONE_NUMBER to { hooks.hidePhoneNumber() },
             PreferenceKeys.CAMERA_DEFAULT_BACK to { hooks.cameraDefaultBack() },
             PreferenceKeys.CAMERA_KEEP_ZOOM to { hooks.cameraKeepZoom() },
             PreferenceKeys.ROUND_VIDEO_FIX to { hooks.fixRoundVideoRecording() }
