@@ -312,6 +312,13 @@ object TgDeobf {
             }
         }
 
+    /** DialogCell's MessageObject field: the message a chat list row shows. */
+    fun dialogCellMessage(buildLayout: Method): Field? =
+        buildLayout.declaringClass.declaredFields.singleOrNull {
+            it.type.name == "org.telegram.messenger.MessageObject" &&
+                !java.lang.reflect.Modifier.isStatic(it.modifiers)
+        }?.apply { isAccessible = true }
+
     /**
      * DialogsActivity.createView(Context): the chat list screen, the only createView that
      * reads R.drawable.outline_fab_story_24 (the story camera floating button).
