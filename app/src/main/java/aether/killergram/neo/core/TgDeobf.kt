@@ -320,6 +320,120 @@ object TgDeobf {
         }?.apply { isAccessible = true }
 
     /**
+     * The profile screen's list. ProfileActivity keeps its class name but not its members;
+     * its list adapter (formerly ProfileActivity.ListAdapter) is the class constructed from
+     * (ProfileActivity, Context) that creates view holders from (ViewGroup, int).
+     *
+     * Row positions are the ProfileActivity int fields the adapter's getItemViewType reads,
+     * the row count is the one its getItemCount reads, and updateRowsIds is the no-arg
+     * method that writes the row count.
+     */
+    data class ProfileRows(
+        val adapterClass: Class<*>,
+        val getItemViewType: Method,
+        val onBindViewHolder: Method,
+        val isEnabled: Method?,
+        val rowCount: Field,
+        val rowFields: List<Field>,
+        val updateRowsIds: Method,
+    )
+
+    fun profileRows(lpparam: LoadPackageParam, profileClass: Class<*>): ProfileRows? {
+        if (cache.containsKey(KEY_PROFILE_ROWS)) return cache[KEY_PROFILE_ROWS] as ProfileRows?
+
+        val resolved = runCatching {
+            withBridge(lpparam) { bridge ->
+                val adapterName = bridge.findClass {
+                    matcher {
+                        methods {
+                            add {
+                                name("<init>")
+                                paramTypes(profileClass.name, "android.content.Context")
+                            }
+                            add { paramTypes("android.view.ViewGroup", "int") }
+                        }
+                    }
+                }.singleOrNull()?.name ?: return@withBridge null
+                val adapterClass = XposedHelpers.findClass(adapterName, lpparam.classLoader)
+                val methods = adapterClass.declaredMethods.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) }
+                val getItemViewType = methods.singleOrNull {
+                    it.returnType == Int::class.javaPrimitiveType &&
+                        it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+                } ?: return@withBridge null
+                val getItemCount = methods.singleOrNull {
+                    it.returnType == Int::class.javaPrimitiveType && it.parameterTypes.isEmpty()
+                } ?: return@withBridge null
+                val holderClass = methods.singleOrNull {
+                    it.parameterTypes.contentEquals(arrayOf(android.view.ViewGroup::class.java, Int::class.javaPrimitiveType))
+                }?.returnType ?: return@withBridge null
+                val onBind = methods.singleOrNull {
+                    it.returnType == Void.TYPE &&
+                        it.parameterTypes.contentEquals(arrayOf(holderClass, Int::class.javaPrimitiveType))
+                } ?: return@withBridge null
+                val isEnabled = methods.singleOrNull {
+                    it.returnType == Boolean::class.javaPrimitiveType &&
+                        it.parameterTypes.contentEquals(arrayOf(holderClass))
+                }
+
+                fun intFieldsReadBy(method: Method) = bridge.findField {
+                    matcher {
+                        declaredClass(profileClass.name)
+                        type("int")
+                        readMethods {
+                            add {
+                                declaredClass(adapterName)
+                                name(method.name)
+                                paramCount(method.parameterTypes.size)
+                                returnType(method.returnType.name)
+                            }
+                        }
+                    }
+                }.map { it.getFieldInstance(lpparam.classLoader).apply { isAccessible = true } }
+
+                val rowCount = intFieldsReadBy(getItemCount).singleOrNull() ?: return@withBridge null
+                val rowFields = intFieldsReadBy(getItemViewType).filter { it != rowCount }
+                val updateRowsIds = bridge.findMethod {
+                    matcher {
+                        declaredClass(profileClass.name)
+                        returnType("void")
+                        paramCount(0)
+                        addUsingField(
+                            "L${profileClass.name.replace('.', '/')};->${rowCount.name}:I",
+                            UsingType.Write
+                        )
+                    }
+                }.singleOrNull()?.getMethodInstance(lpparam.classLoader) ?: return@withBridge null
+
+                ProfileRows(
+                    adapterClass,
+                    getItemViewType.apply { isAccessible = true },
+                    onBind.apply { isAccessible = true },
+                    isEnabled?.apply { isAccessible = true },
+                    rowCount,
+                    rowFields,
+                    updateRowsIds.apply { isAccessible = true },
+                )
+            }
+        }.onFailure {
+            log("Profile rows resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+
+        cache[KEY_PROFILE_ROWS] = resolved
+        if (resolved != null) {
+            log(
+                "Resolved profile rows: adapter=${resolved.adapterClass.name} " +
+                    "type=${resolved.getItemViewType.name} bind=${resolved.onBindViewHolder.name} " +
+                    "rows=${resolved.rowFields.size} count=${resolved.rowCount.name} " +
+                    "update=${resolved.updateRowsIds.name}",
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve profile rows", "ERROR")
+        }
+        return resolved
+    }
+
+    /**
      * DialogsActivity.createView(Context): the chat list screen, the only createView that
      * reads R.drawable.outline_fab_story_24 (the story camera floating button).
      */
@@ -617,6 +731,7 @@ object TgDeobf {
     private const val KEY_VOLUME_VIDEO = "volumeVideo"
     private const val KEY_DIALOGS_ARRAY = "dialogsArray"
     private const val KEY_DIALOG_CELL_BUILD_LAYOUT = "dialogCellBuildLayout"
+    private const val KEY_PROFILE_ROWS = "profileRows"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "

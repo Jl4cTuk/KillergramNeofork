@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.content.Context
 import android.view.View
@@ -30,7 +31,11 @@ fun Hooks.showProfileUserId() {
     log("Adding copyable profile ID row to profile screens...")
 
     val profileActivityClass = loadClass("org.telegram.ui.ProfileActivity") ?: return
-    val listAdapterClass = loadClass("org.telegram.ui.ProfileActivity\$ListAdapter") ?: return
+    val listAdapterClass = loadClass("org.telegram.ui.ProfileActivity\$ListAdapter", logOnFailure = false)
+    if (listAdapterClass == null) {
+        showObfuscatedProfileUserId(profileActivityClass)
+        return
+    }
     val androidUtilitiesClass = loadClass("org.telegram.messenger.AndroidUtilities")
     val bulletinFactoryClass = loadClass("org.telegram.ui.Components.BulletinFactory")
     val textDetailViewType = runCatching {
@@ -183,6 +188,221 @@ fun Hooks.showProfileUserId() {
             }
         }
     )
+}
+
+/*
+ * Telegram 12.10.2+: ProfileActivity's members are obfuscated, so rows are not found by
+ * name. The ID row goes right after the last text detail row (phone, username) of the
+ * first info block, found by asking the adapter for each row's view type; every row
+ * position field from that point on is shifted down by one.
+ */
+private const val VIEW_TYPE_TEXT_DETAIL = 2
+private val SECTION_BREAK_VIEW_TYPES = setOf(7, 26, 28)
+private val INFO_VIEW_TYPES = setOf(VIEW_TYPE_TEXT_DETAIL, 3, 19, 30)
+private const val USER_ID_CELL_FIELD = "kg_user_id_cell"
+private const val PROBE_ADAPTER_FIELD = "kg_user_id_probe_adapter"
+
+private fun Hooks.showObfuscatedProfileUserId(profileActivityClass: Class<*>) {
+    val rows = TgDeobf.profileRows(lpparam, profileActivityClass) ?: return
+    val androidUtilitiesClass = loadClass("org.telegram.messenger.AndroidUtilities")
+    val chatObjectClass = loadClass("org.telegram.messenger.ChatObject")
+
+    XposedBridge.hookMethod(rows.updateRowsIds, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            val profileActivity = param.thisObject ?: return
+            runCatching {
+                installObfuscatedUserIdRow(profileActivity, rows, chatObjectClass)
+            }.onFailure {
+                setSyntheticUserIdRow(profileActivity, -1, false)
+                log("Failed to add profile ID row: ${it.message}", "DEBUG")
+            }
+        }
+    })
+
+    XposedBridge.hookMethod(rows.getItemViewType, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val profileActivity = adapterProfile(param.thisObject, profileActivityClass) ?: return
+            if (param.args[0] == getSyntheticUserIdRow(profileActivity)) {
+                param.result = VIEW_TYPE_TEXT_DETAIL
+            }
+        }
+    })
+
+    XposedBridge.hookMethod(rows.onBindViewHolder, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val adapter = param.thisObject ?: return
+            val profileActivity = adapterProfile(adapter, profileActivityClass) ?: return
+            val cell = holderView(param.args[0]) ?: return
+            val position = param.args[1] as Int
+            if (position != getSyntheticUserIdRow(profileActivity)) {
+                XposedHelpers.removeAdditionalInstanceField(cell, USER_ID_CELL_FIELD)
+                return
+            }
+            runCatching {
+                val itemCount = XposedHelpers.getIntField(profileActivity, rows.rowCount.name)
+                val nextType = if (position + 1 < itemCount) {
+                    rows.getItemViewType.invoke(adapter, position + 1) as Int
+                } else {
+                    null
+                }
+                val divider = nextType !in SECTION_BREAK_VIEW_TYPES
+                textAndValueSetter(cell.javaClass)?.invoke(
+                    cell, resolveObfuscatedProfileId(profileActivity, chatObjectClass).toString(),
+                    USER_ID_LABEL, divider
+                )
+                XposedHelpers.setAdditionalInstanceField(cell, USER_ID_CELL_FIELD, true)
+                param.result = null
+            }.onFailure {
+                log("Failed to bind profile ID row: ${it.message}", "DEBUG")
+            }
+        }
+    })
+
+    rows.isEnabled?.let { isEnabled ->
+        XposedBridge.hookMethod(isEnabled, object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val cell = holderView(param.args[0]) ?: return
+                if (XposedHelpers.getAdditionalInstanceField(cell, USER_ID_CELL_FIELD) == true) {
+                    param.result = true
+                }
+            }
+        })
+    }
+
+    // Row taps: a static (ProfileActivity, ..., View, int position, float, float) handler.
+    val clickHandlers = profileActivityClass.declaredMethods.filter { method ->
+        val types = method.parameterTypes
+        val view = types.indexOf(View::class.java)
+        Modifier.isStatic(method.modifiers) && types.firstOrNull() == profileActivityClass &&
+            view >= 0 && types.size == view + 4 &&
+            types[view + 1] == Int::class.javaPrimitiveType &&
+            types[view + 2] == Float::class.javaPrimitiveType &&
+            types[view + 3] == Float::class.javaPrimitiveType
+    }
+    if (clickHandlers.isEmpty()) {
+        log("Profile row click handler not found — ID row is not copyable", "ERROR")
+    }
+    clickHandlers.forEach { handler ->
+        val positionIndex = handler.parameterTypes.indexOf(View::class.java) + 1
+        XposedBridge.hookMethod(handler, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val profileActivity = param.args[0] ?: return
+                if (param.args[positionIndex] != getSyntheticUserIdRow(profileActivity)) return
+                val id = resolveObfuscatedProfileId(profileActivity, chatObjectClass)
+                runCatching {
+                    XposedHelpers.callStaticMethod(androidUtilitiesClass, "addToClipboard", id.toString())
+                }
+                // Android 13+ confirms clipboard writes itself.
+                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+                    val view = param.args[positionIndex - 1] as? View
+                    view?.context?.let { context ->
+                        android.widget.Toast.makeText(
+                            context, resolveCopiedMessage(view, profileActivity), android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+                param.result = null
+            }
+        })
+    }
+}
+
+private fun installObfuscatedUserIdRow(
+    profileActivity: Any,
+    rows: TgDeobf.ProfileRows,
+    chatObjectClass: Class<*>?
+) {
+    setSyntheticUserIdRow(profileActivity, -1, false)
+    if (resolveObfuscatedProfileId(profileActivity, chatObjectClass) == 0L) return
+
+    val rowCount = rows.rowCount.getInt(profileActivity)
+    val adapter = probeAdapter(profileActivity, rows) ?: return
+    val types = (0 until rowCount).map { rows.getItemViewType.invoke(adapter, it) as Int }
+
+    val start = types.indexOfFirst { it in INFO_VIEW_TYPES }
+    if (start < 0) return
+    var end = start
+    while (end < rowCount && types[end] !in SECTION_BREAK_VIEW_TYPES) end++
+    val block = start until end
+    val lastTextDetail = block.lastOrNull { types[it] == VIEW_TYPE_TEXT_DETAIL }
+    val insertPosition = (lastTextDetail ?: block.first { types[it] in INFO_VIEW_TYPES }) + 1
+
+    for (field in rows.rowFields) {
+        val value = field.getInt(profileActivity)
+        if (value >= insertPosition) field.setInt(profileActivity, value + 1)
+    }
+    rows.rowCount.setInt(profileActivity, rowCount + 1)
+    setSyntheticUserIdRow(profileActivity, insertPosition, false)
+}
+
+/**
+ * An adapter used only to read view types: getItemViewType reads nothing but the
+ * profile's row fields, and the screen's own adapter may not exist yet.
+ */
+private fun probeAdapter(profileActivity: Any, rows: TgDeobf.ProfileRows): Any? {
+    XposedHelpers.getAdditionalInstanceField(profileActivity, PROBE_ADAPTER_FIELD)?.let { return it }
+    val context = runCatching {
+        XposedHelpers.getStaticObjectField(
+            XposedHelpers.findClass("org.telegram.messenger.ApplicationLoader", profileActivity.javaClass.classLoader),
+            "applicationContext"
+        ) as? Context
+    }.getOrNull() ?: return null
+    val adapter = rows.adapterClass.declaredConstructors
+        .single { it.parameterTypes.size == 2 && it.parameterTypes[1] == Context::class.java }
+        .apply { isAccessible = true }
+        .newInstance(profileActivity, context)
+    XposedHelpers.setAdditionalInstanceField(profileActivity, PROBE_ADAPTER_FIELD, adapter)
+    return adapter
+}
+
+/** The adapter's ProfileActivity: its only field of that type. */
+private fun adapterProfile(adapter: Any?, profileActivityClass: Class<*>): Any? {
+    adapter ?: return null
+    val field = adapter.javaClass.declaredFields.firstOrNull { it.type == profileActivityClass } ?: return null
+    field.isAccessible = true
+    return field.get(adapter)
+}
+
+/** RecyclerView.ViewHolder.itemView: the holder's View field. */
+private fun holderView(holder: Any?): View? {
+    holder ?: return null
+    return generateSequence(holder.javaClass as Class<*>) { it.superclass }
+        .flatMap { it.declaredFields.asSequence() }
+        .firstOrNull { it.type == View::class.java && !Modifier.isStatic(it.modifiers) }
+        ?.apply { isAccessible = true }
+        ?.get(holder) as? View
+}
+
+/** TextDetailCell.setTextAndValue(CharSequence, CharSequence, boolean). */
+private fun textAndValueSetter(cellClass: Class<*>): java.lang.reflect.Method? =
+    generateSequence(cellClass as Class<*>) { it.superclass }
+        .flatMap { it.declaredMethods.asSequence() }
+        .firstOrNull {
+            it.returnType == Void.TYPE && it.parameterTypes.contentEquals(
+                arrayOf(CharSequence::class.java, CharSequence::class.java, Boolean::class.javaPrimitiveType)
+            )
+        }
+        ?.apply { isAccessible = true }
+
+private fun resolveObfuscatedProfileId(profileActivity: Any, chatObjectClass: Class<*>?): Long {
+    val arguments = runCatching {
+        XposedHelpers.getObjectField(profileActivity, "arguments") as? android.os.Bundle
+    }.getOrNull() ?: return 0L
+    val userId = arguments.getLong("user_id", 0L)
+    if (userId != 0L) return userId
+    val chatId = abs(arguments.getLong("chat_id", 0L))
+    if (chatId == 0L) return 0L
+
+    val isChannel = runCatching {
+        val account = XposedHelpers.getIntField(profileActivity, "currentAccount")
+        val controllerClass = XposedHelpers.findClass(
+            "org.telegram.messenger.MessagesController", profileActivity.javaClass.classLoader
+        )
+        val controller = XposedHelpers.callStaticMethod(controllerClass, "getInstance", account)
+        val chat = XposedHelpers.callMethod(controller, "getChat", chatId)
+        XposedHelpers.callStaticMethod(chatObjectClass, "isChannel", chat) as Boolean
+    }.getOrDefault(false)
+    return if (isChannel) -(CHANNEL_ID_SHIFT + chatId) else -chatId
 }
 
 private fun installSyntheticUserIdRow(profileActivity: Any) {
