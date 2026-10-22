@@ -8,7 +8,20 @@ import de.robv.android.xposed.XposedHelpers
 fun Hooks.hidePostShareButton() {
     log("Hiding share button for channel posts and reposts in groups...")
 
-    val chatMessageCellClass = loadClass("org.telegram.ui.Cells.ChatMessageCell") ?: return
+    val chatMessageCellClass = loadClass("org.telegram.ui.Cells.ChatMessageCell", logOnFailure = false)
+    if (chatMessageCellClass == null) {
+        // Telegram 12.10.2+: ChatMessageCell.checkNeedDrawShareButton is obfuscated, but it
+        // ends in the kept MessageObject.needDrawShareButton(), which only it asks.
+        val messageObjectClass = loadClass("org.telegram.messenger.MessageObject") ?: return
+        XposedBridge.hookAllMethods(messageObjectClass, "needDrawShareButton", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.result == true && shouldHideShareForMessage(param.thisObject)) {
+                    param.result = false
+                }
+            }
+        })
+        return
+    }
 
     XposedBridge.hookAllMethods(
         chatMessageCellClass,
