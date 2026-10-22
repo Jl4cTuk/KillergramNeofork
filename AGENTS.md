@@ -66,3 +66,4 @@ Official Telegram builds are R8-obfuscated since 12.10.2. `org.telegram.ui.*` cl
 You will usually have official Telegram source tree at ../Telegram for reference.
 You will also have several custom Telegram clients to reference how they do things, like ../exteraGram and ../NagramX for reference.
 When you're done implementing a feature, check if there's a device connected over ADB. If there is - you can use it to install the module yourself, force-stop org.telegram.messenger web, run the app yourself, check logs and do end-to-end testing that way.
+On-screen testing that takes more than a couple of taps/screenshots (navigating several screens, opening chats, long UI flows) is left to the user: install the build, force-stop Telegram, then tell the user exactly what to check on screen and wait for their report. Reading logs over ADB stays with you. Screenshots and UI driving cost far more than the user doing it by hand.
