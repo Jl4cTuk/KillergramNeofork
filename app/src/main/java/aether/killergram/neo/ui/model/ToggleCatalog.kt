@@ -96,6 +96,12 @@ object ToggleCatalog {
                     icon = ToggleIcon.ADD_BOX_OFF
                 ),
                 ModuleToggle(
+                    title = "Hide folder chats from All",
+                    key = PreferenceKeys.HIDE_FOLDER_DUPLICATES,
+                    description = "Chats that belong to any of your folders are shown only there, not in All or in the Archive.",
+                    icon = ToggleIcon.FOLDER
+                ),
+                ModuleToggle(
                     title = "Hide Contacts tab",
                     key = PreferenceKeys.HIDE_CONTACTS_TAB,
                     description = "Hides the Contacts tab from the bottom bar (Telegram 12.2+).",

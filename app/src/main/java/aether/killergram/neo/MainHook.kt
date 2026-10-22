@@ -16,6 +16,7 @@ import aether.killergram.neo.hooks.hideChannelBottomBar
 import aether.killergram.neo.hooks.hideAppUpdates
 import aether.killergram.neo.hooks.hideDialogsFloatingButton
 import aether.killergram.neo.hooks.hideContactsTab
+import aether.killergram.neo.hooks.hideFolderDuplicates
 import aether.killergram.neo.hooks.hideInputBoxButtons
 import aether.killergram.neo.hooks.hideKeyboardOnScroll
 import aether.killergram.neo.hooks.hidePaidStarReactions
@@ -87,6 +88,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             PreferenceKeys.DISABLE_AUTO_AUDIO to { hooks.killAutoAudio() },
             PreferenceKeys.HIDE_APP_UPDATES to { hooks.hideAppUpdates() },
             PreferenceKeys.HIDE_CONTACTS_TAB to { hooks.hideContactsTab() },
+            PreferenceKeys.HIDE_FOLDER_DUPLICATES to { hooks.hideFolderDuplicates() },
             PreferenceKeys.CUSTOMIZE_INPUT_BOX_BUTTONS to { hooks.hideInputBoxButtons() },
             PreferenceKeys.KEEP_DELETED_MESSAGES to { hooks.keepDeletedMessages() },
             PreferenceKeys.DISABLE_ROUNDING to { hooks.noRounding() },

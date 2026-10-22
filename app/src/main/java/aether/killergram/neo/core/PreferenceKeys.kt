@@ -40,6 +40,7 @@ object PreferenceKeys {
     const val CAMERA_KEEP_ZOOM = "camerakeepzoom"
     const val ROUND_VIDEO_FIX = "roundvideofix"
     const val HIDE_CONTACTS_TAB = "hidecontactstab"
+    const val HIDE_FOLDER_DUPLICATES = "hidefolderduplicates"
 
     const val REPLACE_APP_TITLE = "replaceapptitle"
     const val APP_TITLE_MODE = "apptitlemode"

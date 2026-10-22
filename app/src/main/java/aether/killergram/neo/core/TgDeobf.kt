@@ -269,6 +269,50 @@ object TgDeobf {
         }
 
     /**
+     * DialogsActivity.getDialogsArray(account, dialogsType, folderId, frozen): the list a
+     * chat list tab shows. Found next to createView by its signature.
+     */
+    fun dialogsArray(lpparam: LoadPackageParam, dialogsClass: Class<*>): Method? =
+        cachedMethod(lpparam, KEY_DIALOGS_ARRAY, "DialogsActivity.getDialogsArray") { bridge ->
+            bridge.findMethod {
+                matcher {
+                    declaredClass(dialogsClass.name)
+                    returnType("java.util.ArrayList")
+                    paramTypes("int", "int", "int", "boolean")
+                }
+            }
+        }
+
+    /**
+     * DialogCell.buildLayout(): lays out a chat list row from the cell's MessageObject,
+     * including the Archive row's chat names and a forum row's topic names. It is the
+     * no-arg cell method that reads R.drawable.msg_mini_forumarrow (the arrow between
+     * sender and topic) and asks TopicsController for a topic's icon name.
+     */
+    fun dialogCellBuildLayout(lpparam: LoadPackageParam): Method? =
+        cachedMethod(lpparam, KEY_DIALOG_CELL_BUILD_LAYOUT, "DialogCell.buildLayout") { bridge ->
+            bridge.findMethod {
+                matcher {
+                    returnType("void")
+                    paramCount(0)
+                    addUsingField("Lorg/telegram/messenger/R\$drawable;->msg_mini_forumarrow:I", UsingType.Read)
+                    invokeMethods {
+                        add {
+                            declaredClass("org.telegram.messenger.TopicsController")
+                            name("getTopicIconName")
+                        }
+                    }
+                }
+            }.filter { method ->
+                runCatching {
+                    android.view.View::class.java.isAssignableFrom(
+                        XposedHelpers.findClass(method.className, lpparam.classLoader)
+                    )
+                }.getOrDefault(false)
+            }
+        }
+
+    /**
      * DialogsActivity.createView(Context): the chat list screen, the only createView that
      * reads R.drawable.outline_fab_story_24 (the story camera floating button).
      */
@@ -564,6 +608,8 @@ object TgDeobf {
     private const val KEY_HAS_STORIES = "hasStories"
     private const val KEY_DIALOGS_CREATE_VIEW = "dialogsCreateView"
     private const val KEY_VOLUME_VIDEO = "volumeVideo"
+    private const val KEY_DIALOGS_ARRAY = "dialogsArray"
+    private const val KEY_DIALOG_CELL_BUILD_LAYOUT = "dialogCellBuildLayout"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
