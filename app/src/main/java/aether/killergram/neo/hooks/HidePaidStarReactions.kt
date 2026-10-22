@@ -11,9 +11,29 @@ fun Hooks.hidePaidStarReactions() {
     val paidReactionClass = loadClass("org.telegram.tgnet.TLRPC\$TL_reactionPaid")
     val messagesControllerClass = loadClass("org.telegram.messenger.MessagesController")
     val messageObjectClass = loadClass("org.telegram.messenger.MessageObject")
-    val bubbleReactionsClass = loadClass("org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble")
-    val containerReactionsClass = loadClass("org.telegram.ui.Components.ReactionsContainerLayout")
-    val chatActivityClass = loadClass("org.telegram.ui.ChatActivity")
+    // Telegram 12.10.2+ obfuscates these; the data-level hooks below cover them there.
+    val bubbleReactionsClass = loadClass("org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble", logOnFailure = false)
+    val containerReactionsClass = loadClass("org.telegram.ui.Components.ReactionsContainerLayout", logOnFailure = false)
+    val chatActivityClass = loadClass("org.telegram.ui.ChatActivity", logOnFailure = false)
+
+    // Every message's reactions and every chat's full info, from the network and from
+    // the local database alike, are read through these kept TLRPC deserializers. Paid
+    // reactions are dropped there, so no message bubble shows a star, and chats report
+    // paid reactions as unavailable, so the reaction picker offers none.
+    loadClass("org.telegram.tgnet.TLRPC\$MessageReactions")?.let { reactionsClass ->
+        XposedBridge.hookAllMethods(reactionsClass, "TLdeserialize", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                stripPaidReactions(param.result, paidReactionClass)
+            }
+        })
+    }
+    loadClass("org.telegram.tgnet.TLRPC\$ChatFull")?.let { chatFullClass ->
+        XposedBridge.hookAllMethods(chatFullClass, "TLdeserialize", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                forceDisablePaidReactionsFlag(param.result)
+            }
+        })
+    }
 
     if (messagesControllerClass != null) {
         XposedBridge.hookAllMethods(
@@ -147,6 +167,17 @@ private fun removePaidReactionsFromMessage(messageObject: Any?, paidReactionClas
     val reactions = runCatching {
         XposedHelpers.getObjectField(messageOwner, "reactions")
     }.getOrNull() ?: return
+    stripPaidReactions(reactions, paidReactionClass)
+}
+
+/** Drops paid reactions, and the paid reactors' leaderboard, from a MessageReactions. */
+private fun stripPaidReactions(reactions: Any?, paidReactionClass: Class<*>?) {
+    if (reactions == null) {
+        return
+    }
+    runCatching {
+        (XposedHelpers.getObjectField(reactions, "top_reactors") as? MutableList<*>)?.clear()
+    }
 
     val results = runCatching {
         @Suppress("UNCHECKED_CAST")
