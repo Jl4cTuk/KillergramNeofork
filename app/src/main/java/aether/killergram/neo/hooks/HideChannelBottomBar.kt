@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.view.View
 import de.robv.android.xposed.XC_MethodHook
@@ -9,8 +10,12 @@ import de.robv.android.xposed.XposedHelpers
 fun Hooks.hideChannelBottomBar() {
     log("Hiding channel bottom action bar...")
 
-    val chatActivityClass = loadClass("org.telegram.ui.ChatActivity") ?: return
     val chatObjectClass = loadClass("org.telegram.messenger.ChatObject")
+    val chatActivityClass = loadClass("org.telegram.ui.ChatActivity", logOnFailure = false)
+    if (chatActivityClass == null) {
+        hideObfuscatedChannelBottomBar(chatObjectClass)
+        return
+    }
     val androidUtilitiesClass = loadClass("org.telegram.messenger.AndroidUtilities")
 
     XposedBridge.hookAllMethods(
@@ -115,10 +120,76 @@ fun Hooks.hideChannelBottomBar() {
     }
 }
 
+/*
+ * Telegram 12.10.2+: ChatActivity's members are obfuscated. The bottom bar of a channel
+ * one cannot post in is the "bottom overlay" view (the one with a getContainer() that
+ * holds the mute and gift buttons) inside the input island; hiding it and collapsing the
+ * island (calculateInputIslandHeight -> 0) gives the space back to the message list. The
+ * input island container keeps its setter names.
+ */
+private fun Hooks.hideObfuscatedChannelBottomBar(chatObjectClass: Class<*>?) {
+    val chatClass = TgDeobf.chatActivityClass(lpparam) ?: return
+    val bar = TgDeobf.chatBottomBar(lpparam, chatClass) ?: return
+    val inputContainerField = chatClass.declaredFields.firstOrNull { field ->
+        field.type.declaredMethods.any { it.name == "setInputBubbleHeight" }
+    }?.apply { isAccessible = true }
+    val overlayFields = chatClass.declaredFields.filter { field ->
+        View::class.java.isAssignableFrom(field.type) &&
+            generateSequence(field.type as Class<*>) { it.superclass }
+                .any { type -> type.declaredMethods.any { it.name == "getContainer" && it.parameterTypes.isEmpty() } }
+    }.onEach { it.isAccessible = true }
+    if (inputContainerField == null || overlayFields.isEmpty()) {
+        log("Channel bottom bar views not found (input=${inputContainerField != null}, overlays=${overlayFields.size})", "ERROR")
+    }
+
+    fun shouldHide(chatActivity: Any): Boolean =
+        isReadOnlyChannel(runCatching { bar.currentChat.get(chatActivity) }.getOrNull(), chatObjectClass)
+
+    XposedBridge.hookMethod(bar.updateBottomOverlay, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            val chatActivity = param.thisObject ?: return
+            if (!shouldHide(chatActivity)) return
+            overlayFields.forEach { field ->
+                val overlay = runCatching { field.get(chatActivity) }.getOrNull() ?: return@forEach
+                (overlay as? View)?.visibility = View.GONE
+                runCatching { (XposedHelpers.callMethod(overlay, "getContainer") as? View)?.visibility = View.GONE }
+            }
+            val container = inputContainerField?.get(chatActivity) ?: return
+            runCatching {
+                XposedHelpers.callMethod(container, "setInputBubbleHeight", 0f)
+                XposedHelpers.callMethod(container, "setInputBubbleAlpha", 0)
+                XposedHelpers.callMethod(container, "setInputBubbleTranslationY", 0f)
+                XposedHelpers.callMethod(container, "setBlurredBottomHeight", 0f)
+                (XposedHelpers.callMethod(container, "getFadeView") as? View)?.apply {
+                    visibility = View.GONE
+                    alpha = 0f
+                }
+            }.onFailure {
+                log("Failed to collapse channel input island: ${it.message}", "DEBUG")
+            }
+        }
+    })
+
+    bar.inputIslandHeight?.let { islandHeight ->
+        XposedBridge.hookMethod(islandHeight, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val chatActivity = param.thisObject ?: return
+                if (shouldHide(chatActivity)) param.result = 0f
+            }
+        })
+    } ?: log("calculateInputIslandHeight not found — channel bottom space stays", "ERROR")
+}
+
 private fun shouldHideForThisChat(chatActivityInstance: Any, chatObjectClass: Class<*>?): Boolean {
     val currentChat = runCatching {
         XposedHelpers.getObjectField(chatActivityInstance, "currentChat")
     }.getOrNull() ?: return false
+    return isReadOnlyChannel(currentChat, chatObjectClass)
+}
+
+/** A broadcast channel (not a megagroup) one cannot post in. */
+private fun isReadOnlyChannel(currentChat: Any?, chatObjectClass: Class<*>?): Boolean {
+    currentChat ?: return false
 
     val isChannelAndNotMegagroup = when {
         chatObjectClass != null -> runCatching {

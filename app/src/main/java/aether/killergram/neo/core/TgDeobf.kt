@@ -268,6 +268,10 @@ object TgDeobf {
             }
         }
 
+    /** ChatActivity, the chat screen: the class that declares maybePlayVisibleVideo. */
+    fun chatActivityClass(lpparam: LoadPackageParam): Class<*>? =
+        volumeKeyVideoPlayback(lpparam)?.declaringClass
+
     /**
      * DialogsActivity.getDialogsArray(account, dialogsType, folderId, frozen): the list a
      * chat list tab shows. Found next to createView by its signature.
@@ -318,6 +322,76 @@ object TgDeobf {
             it.type.name == "org.telegram.messenger.MessageObject" &&
                 !java.lang.reflect.Modifier.isStatic(it.modifiers)
         }?.apply { isAccessible = true }
+
+    /**
+     * ChatActivity's bottom bar. [updateBottomOverlay] is updateBottomOverlay(boolean), the
+     * only (boolean) method that reads R.string.AccountFrozenBottomTitle; [inputIslandHeight]
+     * is calculateInputIslandHeight(boolean), the float method that lerps between the
+     * island heights; [currentChat] is the TLRPC.Chat field updateBottomOverlay reads most.
+     */
+    data class ChatBottomBar(
+        val updateBottomOverlay: Method,
+        val inputIslandHeight: Method?,
+        val currentChat: Field,
+    )
+
+    fun chatBottomBar(lpparam: LoadPackageParam, chatClass: Class<*>): ChatBottomBar? {
+        if (cache.containsKey(KEY_CHAT_BOTTOM_BAR)) return cache[KEY_CHAT_BOTTOM_BAR] as ChatBottomBar?
+
+        val resolved = runCatching {
+            withBridge(lpparam) { bridge ->
+                val update = bridge.findMethod {
+                    matcher {
+                        declaredClass(chatClass.name)
+                        returnType("void")
+                        paramTypes("boolean")
+                        addUsingField("Lorg/telegram/messenger/R\$string;->AccountFrozenBottomTitle:I", UsingType.Read)
+                    }
+                }.singleOrNull() ?: return@withBridge null
+                val currentChat = update.usingFields
+                    .filter {
+                        it.usingType.isRead() && it.field.declaredClassName == chatClass.name &&
+                            it.field.typeName == "org.telegram.tgnet.TLRPC\$Chat"
+                    }
+                    .groupingBy { it.field.name }
+                    .eachCount()
+                    .maxByOrNull { it.value }
+                    ?.key ?: return@withBridge null
+                val islandHeight = bridge.findMethod {
+                    matcher {
+                        declaredClass(chatClass.name)
+                        returnType("float")
+                        paramTypes("boolean")
+                        invokeMethods {
+                            add {
+                                declaredClass("org.telegram.messenger.AndroidUtilities")
+                                name("lerp")
+                            }
+                        }
+                    }
+                }.singleOrNull()
+                ChatBottomBar(
+                    update.getMethodInstance(lpparam.classLoader).apply { isAccessible = true },
+                    islandHeight?.getMethodInstance(lpparam.classLoader)?.apply { isAccessible = true },
+                    XposedHelpers.findField(chatClass, currentChat),
+                )
+            }
+        }.onFailure {
+            log("Chat bottom bar resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+
+        cache[KEY_CHAT_BOTTOM_BAR] = resolved
+        if (resolved != null) {
+            log(
+                "Resolved chat bottom bar: update=${resolved.updateBottomOverlay.name} " +
+                    "island=${resolved.inputIslandHeight?.name} chat=${resolved.currentChat.name}",
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve chat bottom bar", "ERROR")
+        }
+        return resolved
+    }
 
     /**
      * The profile screen's list. ProfileActivity keeps its class name but not its members;
@@ -732,6 +806,7 @@ object TgDeobf {
     private const val KEY_DIALOGS_ARRAY = "dialogsArray"
     private const val KEY_DIALOG_CELL_BUILD_LAYOUT = "dialogCellBuildLayout"
     private const val KEY_PROFILE_ROWS = "profileRows"
+    private const val KEY_CHAT_BOTTOM_BAR = "chatBottomBar"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
