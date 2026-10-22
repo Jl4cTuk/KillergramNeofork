@@ -268,6 +268,32 @@ object TgDeobf {
             }
         }
 
+    /**
+     * InstantCameraView.finishZoom(): animates the pinch zoom back to none when the pinch
+     * ends. The no-arg method of the camera view that animates (ValueAnimator.ofFloat)
+     * from the session's zoom range (Camera2Session.getMinZoom).
+     */
+    fun instantCameraFinishZoom(lpparam: LoadPackageParam, cameraClassName: String): Method? =
+        cachedMethod(lpparam, KEY_FINISH_ZOOM, "InstantCameraView.finishZoom") { bridge ->
+            bridge.findMethod {
+                matcher {
+                    declaredClass(cameraClassName)
+                    returnType("void")
+                    paramCount(0)
+                    invokeMethods {
+                        add {
+                            declaredClass("org.telegram.messenger.camera.Camera2Session")
+                            name("getMinZoom")
+                        }
+                        add {
+                            declaredClass("android.animation.ValueAnimator")
+                            name("ofFloat")
+                        }
+                    }
+                }
+            }
+        }
+
     /** ChatActivity, the chat screen: the class that declares maybePlayVisibleVideo. */
     fun chatActivityClass(lpparam: LoadPackageParam): Class<*>? =
         volumeKeyVideoPlayback(lpparam)?.declaringClass
@@ -807,6 +833,7 @@ object TgDeobf {
     private const val KEY_DIALOG_CELL_BUILD_LAYOUT = "dialogCellBuildLayout"
     private const val KEY_PROFILE_ROWS = "profileRows"
     private const val KEY_CHAT_BOTTOM_BAR = "chatBottomBar"
+    private const val KEY_FINISH_ZOOM = "finishZoom"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
