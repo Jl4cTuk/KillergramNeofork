@@ -39,8 +39,11 @@ private fun Hooks.hookMessagesControllerField(fieldName: String, value: Int) {
     val hook = object : XC_MethodHook() {
         override fun afterHookedMethod(param: MethodHookParam) {
             runCatching {
+                // Config updates run often; only a value Telegram changed needs setting again.
+                val current = XposedHelpers.getIntField(param.thisObject, fieldName)
+                if (current == value) return@runCatching
                 XposedHelpers.setIntField(param.thisObject, fieldName, value)
-                log("Set $fieldName to $value", "DEBUG")
+                log("Set $fieldName: $current -> $value", "DEBUG")
             }.onFailure {
                 log("Failed to set $fieldName: ${it.message}", "DEBUG")
             }

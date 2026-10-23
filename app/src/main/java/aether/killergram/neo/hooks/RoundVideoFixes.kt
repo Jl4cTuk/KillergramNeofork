@@ -25,6 +25,11 @@ private const val STABLE_FPS = 30
 private const val VIDEO_START_TIMEOUT_MS = 3000L
 private const val RECENT_FRAMES = 120
 
+// Frame stamps are moved from CLOCK_BOOTTIME to CLOCK_MONOTONIC once the two clocks are at
+// least this far apart. A frame is ~30-100 ms old when its handler runs, so below ~200 ms
+// a BOOTTIME stamp cannot be told from a MONOTONIC one.
+private const val CLOCK_DRIFT_NS = 200_000_000L
+
 /** A camera video encoder class: where it keeps its AudioRecord and its long fields. */
 private class EncoderState(val audioField: Field, val longFields: List<Field>) {
     // Stamps (µs) of the latest frames handed to the encoder, as the encoder reads them.
@@ -39,8 +44,14 @@ private class AudioState(val encoder: Any, val encoderState: EncoderState) {
 private val encoders = WeakHashMap<Any, EncoderState>()
 private val audioStates = WeakHashMap<AudioRecord, AudioState>()
 
-// The encoder whose frame handler is running on this thread.
+// AudioRecords that belong to no camera encoder (voice messages, calls): read() and
+// getTimestamp() run for them too, so the lookup result is remembered.
+private val foreignRecords = java.util.Collections.newSetFromMap(WeakHashMap<AudioRecord, Boolean>())
+
+// The encoder whose frame handler is running on this thread, and the stamp the handler
+// falls back to when SurfaceTexture.getTimestamp() returns 0.
 private val frameEncoder = ThreadLocal<Any?>()
+private val frameFallbackStamp = ThreadLocal<Long?>()
 
 // The Camera2Session whose capture request is being rebuilt on this thread.
 private val updatingCamera2Session = ThreadLocal<Any?>()
@@ -79,7 +90,7 @@ fun Hooks.fixRoundVideoRecording() {
     if (handlers.isNotEmpty()) {
         hookEncoders(handlers)
         hookFrameTimestamps(handlers)
-        hookAudio()
+        hookAudio(handlers.map { it.declaringClass.name }.toSet())
     }
     hookCamera2FrameRate()
     hookCamera1FrameRate()
@@ -112,10 +123,12 @@ private fun hookFrameTimestamps(handlers: List<Method>) {
         XposedBridge.hookMethod(onFrame, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 frameEncoder.set(param.thisObject)
+                frameFallbackStamp.set(param.args.getOrNull(2) as? Long)
             }
 
             override fun afterHookedMethod(param: MethodHookParam) {
                 frameEncoder.set(null)
+                frameFallbackStamp.set(null)
             }
         })
     }
@@ -124,15 +137,19 @@ private fun hookFrameTimestamps(handlers: List<Method>) {
         override fun afterHookedMethod(param: MethodHookParam) {
             val encoder = frameEncoder.get() ?: return
             var timestamp = param.result as? Long ?: return
-            if (timestamp == 0L) return
-
-            val boottime = SystemClock.elapsedRealtimeNanos()
-            val monotonic = System.nanoTime()
-            val offset = boottime - monotonic
-            // Convert only once the clocks have drifted apart (the phone has slept).
-            if (offset >= 1_000_000_000L && abs(timestamp - boottime) < abs(timestamp - monotonic)) {
-                timestamp -= offset
-                param.result = timestamp
+            if (timestamp == 0L) {
+                // The handler then encodes the frame with the stamp it was given; the first
+                // frame must still be recognised, or the microphone is drained until timeout.
+                timestamp = frameFallbackStamp.get()?.takeIf { it > 0 } ?: return
+            } else {
+                val boottime = SystemClock.elapsedRealtimeNanos()
+                val monotonic = System.nanoTime()
+                val offset = boottime - monotonic
+                // Convert only once the clocks have drifted apart (the phone has slept).
+                if (offset >= CLOCK_DRIFT_NS && abs(timestamp - boottime) < abs(timestamp - monotonic)) {
+                    timestamp -= offset
+                    param.result = timestamp
+                }
             }
 
             val state = synchronized(encoders) { encoders[encoder] } ?: return
@@ -158,23 +175,33 @@ private fun videoStarted(audio: AudioState): Boolean {
 
 private fun audioStateOf(record: AudioRecord): AudioState? {
     synchronized(audioStates) { audioStates[record]?.let { return it } }
+    synchronized(foreignRecords) { if (record in foreignRecords) return null }
     val owner = synchronized(encoders) {
         encoders.entries.firstOrNull { (encoder, state) -> state.audioField.get(encoder) === record }
-    } ?: return null
+    } ?: run {
+        synchronized(foreignRecords) { foreignRecords.add(record) }
+        return null
+    }
+    // The encoder's record should have been switched to CAMCORDER when it was built; if
+    // not, the sound lags the picture again by the capture latency (~190 ms on a Pixel).
+    if (record.audioSource != MediaRecorder.AudioSource.CAMCORDER) {
+        log("${owner.key.javaClass.name} records from audio source ${record.audioSource}, not CAMCORDER — sound may lag", "ERROR")
+    }
     return synchronized(audioStates) {
         audioStates.getOrPut(record) { AudioState(owner.key, owner.value) }
     }
 }
 
-private fun hookAudio() {
+/** A class named [encoderClass] or nested in it (a handler, a runnable, a lambda). */
+private fun isEncoderFrame(className: String, encoderClasses: Set<String>) =
+    encoderClasses.any { className == it || className.startsWith("$it$") }
+
+private fun hookAudio(encoderClasses: Set<String>) {
     // The encoders build their AudioRecord with source DEFAULT; switch it to CAMCORDER.
     XposedBridge.hookAllConstructors(AudioRecord::class.java, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             if (param.args.size != 5 || param.args[0] != MediaRecorder.AudioSource.DEFAULT) return
-            val encoderClasses = synchronized(encoders) {
-                encoders.keys.mapTo(HashSet()) { it.javaClass.name }
-            }
-            if (Throwable().stackTrace.none { it.className in encoderClasses }) return
+            if (Throwable().stackTrace.none { isEncoderFrame(it.className, encoderClasses) }) return
             param.args[0] = MediaRecorder.AudioSource.CAMCORDER
         }
     })
@@ -194,14 +221,23 @@ private fun hookAudio() {
                 val size = param.args[1] as Int
                 val scratch = ByteBuffer.allocateDirect(size)
                 val bytesPerFrame = 2L * record.channelCount.coerceAtLeast(1)
-                val deadline = SystemClock.elapsedRealtime() + VIDEO_START_TIMEOUT_MS
-                while (!videoStarted(state) && SystemClock.elapsedRealtime() < deadline) {
+                val start = SystemClock.elapsedRealtime()
+                val deadline = start + VIDEO_START_TIMEOUT_MS
+                var started = videoStarted(state)
+                while (!started && SystemClock.elapsedRealtime() < deadline) {
                     scratch.clear()
                     val dropped = XposedBridge.invokeOriginalMethod(
                         param.method, record, arrayOf(scratch, size)
                     ) as? Int ?: break
                     if (dropped <= 0) break
                     state.framesRead += dropped / bytesPerFrame
+                    started = videoStarted(state)
+                }
+                val drainedMs = state.framesRead * 1000 / record.sampleRate.coerceAtLeast(1)
+                if (started) {
+                    log("Video note audio starts with the first frame (${drainedMs} ms drained)", "DEBUG")
+                } else {
+                    log("Video note first frame not recognised; ${drainedMs} ms of audio dropped", "ERROR")
                 }
             }
 
