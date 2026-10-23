@@ -99,6 +99,12 @@ object ToggleCatalog {
                     icon = ToggleIcon.MENU
                 ),
                 ModuleToggle(
+                    title = "Don't swipe into Contacts",
+                    key = PreferenceKeys.BLOCK_CONTACTS_SWIPE,
+                    description = "Swiping past the last folder, or back from Settings, no longer opens the Contacts tab.",
+                    icon = ToggleIcon.VERTICAL_SPLIT
+                ),
+                ModuleToggle(
                     title = "Hide channel action bar",
                     key = PreferenceKeys.HIDE_CHANNEL_BOTTOM_BAR,
                     description = "Hides the bottom channel action bar (mute/discussion/gifts/join).",

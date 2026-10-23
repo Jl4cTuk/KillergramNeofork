@@ -165,6 +165,75 @@ object TgDeobf {
         }
 
     /**
+     * The main tabs pager (ViewPagerActivity's pager, made in its createView from
+     * (ViewPagerActivity, Context)). [canScrollForward] / [canScrollBackward] decide whether
+     * a horizontal swipe may leave the current tab; they ask the visible tab with
+     * canParentTabsSlide(event, forward), so the forward one passes the literal true.
+     */
+    data class MainTabsPager(
+        val canScrollForward: Method,
+        val canScrollBackward: Method,
+    )
+
+    fun mainTabsPager(lpparam: LoadPackageParam): MainTabsPager? {
+        if (cache.containsKey(KEY_MAIN_TABS_PAGER)) return cache[KEY_MAIN_TABS_PAGER] as MainTabsPager?
+
+        val pagerActivity = mainTabsCreateView(lpparam)?.declaringClass?.superclass
+        val resolved = pagerActivity?.let { activity ->
+            runCatching {
+                withBridge(lpparam) { bridge ->
+                    val pagerName = bridge.findClass {
+                        matcher {
+                            methods {
+                                add {
+                                    name("<init>")
+                                    paramTypes(activity.name, "android.content.Context")
+                                }
+                                add {
+                                    returnType("boolean")
+                                    paramTypes("android.view.MotionEvent")
+                                }
+                            }
+                        }
+                    }.singleOrNull()?.name ?: return@withBridge null
+                    val pager = XposedHelpers.findClass(pagerName, lpparam.classLoader)
+                    val canScroll = pager.declaredMethods.filter {
+                        it.returnType == Boolean::class.javaPrimitiveType &&
+                            it.parameterTypes.contentEquals(arrayOf(android.view.MotionEvent::class.java))
+                    }
+                    if (canScroll.size != 2) return@withBridge null
+                    val forwardName = bridge.findMethod {
+                        matcher {
+                            declaredClass(pagerName)
+                            returnType("boolean")
+                            paramTypes("android.view.MotionEvent")
+                            usingNumbers(1)
+                        }
+                    }.singleOrNull()?.name ?: return@withBridge null
+                    MainTabsPager(
+                        canScroll.single { it.name == forwardName }.apply { isAccessible = true },
+                        canScroll.single { it.name != forwardName }.apply { isAccessible = true },
+                    )
+                }
+            }.onFailure {
+                log("Main tabs pager resolution failed: ${it.message}", "ERROR")
+            }.getOrNull()
+        }
+
+        cache[KEY_MAIN_TABS_PAGER] = resolved
+        if (resolved != null) {
+            log(
+                "Resolved main tabs pager: ${resolved.canScrollForward.declaringClass.name} " +
+                    "forward=${resolved.canScrollForward.name} backward=${resolved.canScrollBackward.name}",
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve main tabs pager", "ERROR")
+        }
+        return resolved
+    }
+
+    /**
      * InstantCameraView's current GL surface index (0 = front session, 1 = back session
      * when both lenses are opened at once). The GL renderer flips it on a camera switch,
      * in the method that logs "GL surface flip applied: surface=".
@@ -834,6 +903,7 @@ object TgDeobf {
     private const val KEY_PROFILE_ROWS = "profileRows"
     private const val KEY_CHAT_BOTTOM_BAR = "chatBottomBar"
     private const val KEY_FINISH_ZOOM = "finishZoom"
+    private const val KEY_MAIN_TABS_PAGER = "mainTabsPager"
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
