@@ -1,5 +1,7 @@
 package aether.killergram.neo
 
+import aether.killergram.neo.core.Feature
+import aether.killergram.neo.core.Features
 import aether.killergram.neo.core.PreferenceKeys
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.hooks.Hooks
@@ -45,7 +47,7 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 /**
  * The module entry (libxposed API 102, listed in META-INF/xposed/java_init.list). Hooks
  * are installed once the target app's class loader is ready, before its Application is
- * created.
+ * created. Each tweak is a [Feature] that follows its setting while the app runs.
  */
 class MainHook : XposedModule() {
     private val packageBlocklist = arrayOf(  // Apparently sometimes LSPosed will just hook us into random crap like GMS or ourselves
@@ -76,79 +78,86 @@ class MainHook : XposedModule() {
         aether.killergram.neo.log("Injecting for ${lpparam.packageName}", "DEBUG")
         val hooks = Hooks(lpparam)
 
-        val hooksMap = mapOf(
-            PreferenceKeys.FORCE_LOCAL_PREMIUM to { hooks.localPremium() },
-            PreferenceKeys.REMOVE_SPONSORED to { hooks.killSponsoredMessages() },
-            PreferenceKeys.FORCE_FORWARD to { hooks.forceAllowForwards() },
-            PreferenceKeys.HIDE_STORIES to { hooks.killStories() },
-            PreferenceKeys.HIDE_TOPICS to { hooks.hideTopics() },
-            PreferenceKeys.EDITED_ICON to { hooks.replaceEditedLabelWithIcon() },
-            PreferenceKeys.SHOW_SECONDS to { hooks.showTimestampSeconds() },
-            PreferenceKeys.SHOW_USER_ID to { hooks.showProfileUserId() },
-            PreferenceKeys.DEFAULT_HD_MEDIA to { hooks.defaultHdMediaSending() },
-            PreferenceKeys.DISABLE_ATTACH_CAMERA_PREVIEW to { hooks.disableAttachCameraPreview() },
-            PreferenceKeys.HIDE_DIALOGS_FAB to { hooks.hideDialogsFloatingButton() },
-            PreferenceKeys.HIDE_PAID_STAR_REACTIONS to { hooks.hidePaidStarReactions() },
-            PreferenceKeys.HIDE_CHANNEL_BOTTOM_BAR to { hooks.hideChannelBottomBar() },
-            PreferenceKeys.HIDE_POST_SHARE_BUTTON to { hooks.hidePostShareButton() },
-            PreferenceKeys.DISABLE_NOTIFICATION_DELAY to { hooks.disableNotificationDelay() },
-            PreferenceKeys.DISABLE_AUTO_AUDIO to { hooks.killAutoAudio() },
-            PreferenceKeys.HIDE_APP_UPDATES to { hooks.hideAppUpdates() },
-            PreferenceKeys.HIDE_CONTACTS_TAB to { hooks.hideContactsTab() },
-            PreferenceKeys.BLOCK_CONTACTS_SWIPE to { hooks.blockContactsSwipe() },
-            PreferenceKeys.HIDE_FOLDER_DUPLICATES to { hooks.hideFolderDuplicates() },
-            PreferenceKeys.KEEP_DELETED_MESSAGES to { hooks.keepDeletedMessages() },
-            PreferenceKeys.DISABLE_ROUNDING to { hooks.noRounding() },
-            PreferenceKeys.FORCE_SYSTEM_TYPEFACE to { hooks.forceSystemTypeface() },
-            PreferenceKeys.CAMERA_DEFAULT_BACK to { hooks.cameraDefaultBack() },
-            PreferenceKeys.CAMERA_KEEP_ZOOM to { hooks.cameraKeepZoom() },
-            PreferenceKeys.ROUND_VIDEO_FIX to { hooks.fixRoundVideoRecording() }
+        fun intValue(key: String, default: Int) = { prefs.getInt(key, default) }
+        fun choice(key: String, default: String) = {
+            prefs.getStringSet(key, setOf(default))?.firstOrNull() ?: default
+        }
+        fun switch(key: String, install: () -> Unit) = Feature(key, install)
+
+        val stickersLimit = intValue(PreferenceKeys.RECENT_STICKERS_LIMIT, 120)
+        val emojiLimit = intValue(PreferenceKeys.RECENT_EMOJI_LIMIT, 120)
+        val roundBitrate = { choice(PreferenceKeys.CAMERA_BITRATE_VALUE, "1200")().toIntOrNull() ?: 1200 }
+        val roundResolution = { choice(PreferenceKeys.CAMERA_RESOLUTION_VALUE, "512")().toIntOrNull() ?: 512 }
+        val titleMode = choice(PreferenceKeys.APP_TITLE_MODE, "firstname")
+        val titleText = { prefs.getString(PreferenceKeys.APP_TITLE_CUSTOM_TEXT, "") ?: "" }
+        val centerTitle = { prefs.getBoolean(PreferenceKeys.APP_TITLE_CENTER, false) }
+
+        val features = listOf(
+            switch(PreferenceKeys.FORCE_LOCAL_PREMIUM) { hooks.localPremium() },
+            switch(PreferenceKeys.REMOVE_SPONSORED) { hooks.killSponsoredMessages() },
+            switch(PreferenceKeys.FORCE_FORWARD) { hooks.forceAllowForwards() },
+            switch(PreferenceKeys.HIDE_STORIES) { hooks.killStories() },
+            switch(PreferenceKeys.HIDE_TOPICS) { hooks.hideTopics() },
+            switch(PreferenceKeys.EDITED_ICON) { hooks.replaceEditedLabelWithIcon() },
+            switch(PreferenceKeys.SHOW_SECONDS) { hooks.showTimestampSeconds() },
+            switch(PreferenceKeys.SHOW_USER_ID) { hooks.showProfileUserId() },
+            switch(PreferenceKeys.DEFAULT_HD_MEDIA) { hooks.defaultHdMediaSending() },
+            switch(PreferenceKeys.DISABLE_ATTACH_CAMERA_PREVIEW) { hooks.disableAttachCameraPreview() },
+            switch(PreferenceKeys.HIDE_DIALOGS_FAB) { hooks.hideDialogsFloatingButton() },
+            switch(PreferenceKeys.HIDE_PAID_STAR_REACTIONS) { hooks.hidePaidStarReactions() },
+            switch(PreferenceKeys.HIDE_CHANNEL_BOTTOM_BAR) { hooks.hideChannelBottomBar() },
+            switch(PreferenceKeys.HIDE_POST_SHARE_BUTTON) { hooks.hidePostShareButton() },
+            switch(PreferenceKeys.DISABLE_NOTIFICATION_DELAY) { hooks.disableNotificationDelay() },
+            switch(PreferenceKeys.DISABLE_AUTO_AUDIO) { hooks.killAutoAudio() },
+            switch(PreferenceKeys.HIDE_APP_UPDATES) { hooks.hideAppUpdates() },
+            switch(PreferenceKeys.HIDE_CONTACTS_TAB) { hooks.hideContactsTab() },
+            switch(PreferenceKeys.BLOCK_CONTACTS_SWIPE) { hooks.blockContactsSwipe() },
+            switch(PreferenceKeys.HIDE_FOLDER_DUPLICATES) { hooks.hideFolderDuplicates() },
+            switch(PreferenceKeys.KEEP_DELETED_MESSAGES) { hooks.keepDeletedMessages() },
+            switch(PreferenceKeys.DISABLE_ROUNDING) { hooks.noRounding() },
+            switch(PreferenceKeys.FORCE_SYSTEM_TYPEFACE) { hooks.forceSystemTypeface() },
+            switch(PreferenceKeys.CAMERA_DEFAULT_BACK) { hooks.cameraDefaultBack() },
+            switch(PreferenceKeys.CAMERA_KEEP_ZOOM) { hooks.cameraKeepZoom() },
+            switch(PreferenceKeys.ROUND_VIDEO_FIX) { hooks.fixRoundVideoRecording() },
+            Feature(
+                PreferenceKeys.UNLIMITED_RECENTS,
+                setOf(PreferenceKeys.UNLIMITED_RECENTS, PreferenceKeys.RECENT_STICKERS_LIMIT, PreferenceKeys.RECENT_EMOJI_LIMIT),
+                { it.getBoolean(PreferenceKeys.UNLIMITED_RECENTS, false) },
+            ) { hooks.unlimitedRecents(stickersLimit, emojiLimit) },
+            Feature(
+                PreferenceKeys.CAMERA_HIGHER_BITRATE,
+                setOf(PreferenceKeys.CAMERA_HIGHER_BITRATE, PreferenceKeys.CAMERA_BITRATE_VALUE),
+                { it.getBoolean(PreferenceKeys.CAMERA_HIGHER_BITRATE, false) },
+            ) { hooks.cameraHigherBitrate(roundBitrate) },
+            Feature(
+                PreferenceKeys.CAMERA_HIGHER_RESOLUTION,
+                setOf(PreferenceKeys.CAMERA_HIGHER_RESOLUTION, PreferenceKeys.CAMERA_RESOLUTION_VALUE),
+                { it.getBoolean(PreferenceKeys.CAMERA_HIGHER_RESOLUTION, false) },
+            ) { hooks.cameraHigherResolution(roundResolution) },
+            // Telegram's encoder must fit the larger video notes either of them makes.
+            Feature(
+                "videonotesizeguard",
+                setOf(PreferenceKeys.CAMERA_HIGHER_BITRATE, PreferenceKeys.CAMERA_HIGHER_RESOLUTION),
+                {
+                    it.getBoolean(PreferenceKeys.CAMERA_HIGHER_BITRATE, false) ||
+                        it.getBoolean(PreferenceKeys.CAMERA_HIGHER_RESOLUTION, false)
+                },
+            ) { hooks.videoNoteSizeGuard() },
+            Feature(
+                PreferenceKeys.REPLACE_APP_TITLE,
+                setOf(
+                    PreferenceKeys.REPLACE_APP_TITLE, PreferenceKeys.APP_TITLE_MODE,
+                    PreferenceKeys.APP_TITLE_CUSTOM_TEXT, PreferenceKeys.APP_TITLE_CENTER,
+                ),
+                { it.getBoolean(PreferenceKeys.REPLACE_APP_TITLE, false) },
+            ) { hooks.replaceAppTitle(titleMode, titleText, centerTitle) },
         )
 
         // Always-on entry point to the module settings from inside Telegram, so the
         // launcher icon can be hidden.
         hooks.addSettingsEntry()
 
-        hooksMap.forEach { (key, action) ->
-            if (prefs.getBoolean(key, false)) {
-                action.invoke()
-            }
-        }
-
-        if (prefs.getBoolean(PreferenceKeys.UNLIMITED_RECENTS, false)) {
-            val stickersLimit = prefs.getInt(PreferenceKeys.RECENT_STICKERS_LIMIT, 120)
-            val emojiLimit = prefs.getInt(PreferenceKeys.RECENT_EMOJI_LIMIT, 120)
-            hooks.unlimitedRecents(stickersLimit, emojiLimit)
-        }
-
-        val higherBitrate = prefs.getBoolean(PreferenceKeys.CAMERA_HIGHER_BITRATE, false)
-        val higherResolution = prefs.getBoolean(PreferenceKeys.CAMERA_HIGHER_RESOLUTION, false)
-
-        if (higherBitrate) {
-            val bitrate = prefs.getStringSet(PreferenceKeys.CAMERA_BITRATE_VALUE, setOf("1200"))
-                ?.firstOrNull()?.toIntOrNull() ?: 1200
-            hooks.cameraHigherBitrate(bitrate)
-        }
-
-        if (higherResolution) {
-            val resolution = prefs.getStringSet(PreferenceKeys.CAMERA_RESOLUTION_VALUE, setOf("512"))
-                ?.firstOrNull()?.toIntOrNull() ?: 512
-            hooks.cameraHigherResolution(resolution)
-        }
-
-        if (higherBitrate || higherResolution) {
-            hooks.videoNoteSizeGuard()
-        }
-
-
-        if (prefs.getBoolean(PreferenceKeys.REPLACE_APP_TITLE, false)) {
-            val mode = prefs.getStringSet(PreferenceKeys.APP_TITLE_MODE, setOf("firstname"))
-                ?.firstOrNull() ?: "firstname"
-            val customText = prefs.getString(PreferenceKeys.APP_TITLE_CUSTOM_TEXT, "")
-            val centerTitle = prefs.getBoolean(PreferenceKeys.APP_TITLE_CENTER, false)
-            hooks.replaceAppTitle(mode, customText ?: "", centerTitle)
-        }
-
-        TgDeobf.release()
+        // Tweaks that are on get their hooks now; the rest when they are first turned on.
+        Features.start(prefs, features) { TgDeobf.release() }
     }
 }

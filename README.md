@@ -20,6 +20,8 @@ Download the latest fork release [here.](https://github.com/Jl4cTuk/KillergramNe
 
 ## Features
 
+Settings apply while Telegram runs, no restart needed. Screens that are already open update once you reopen them; switching system fonts, and turning on higher video note bitrate or resolution, take effect after a Telegram restart.
+
 #### Appearance
 
 * Force system fonts

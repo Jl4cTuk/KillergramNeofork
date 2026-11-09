@@ -57,12 +57,24 @@ data class ToggleChoiceOption(
     val resourceNames: List<String> = emptyList()
 )
 
+/** When a change to a toggle only takes effect after Telegram restarts. */
+enum class RestartNeed {
+    /** Telegram follows the change while it runs. */
+    NEVER,
+    /** Turning it on needs a restart; turning it off and its parameters apply right away. */
+    TO_ENABLE,
+    /** Turning it on or off needs a restart. */
+    ALWAYS
+}
+
+/** A feature switch. Telegram follows changes while it runs unless [restart] says otherwise. */
 data class ModuleToggle(
     val title: String,
     val key: String,
     val description: String,
     val icon: ToggleIcon,
-    val parameters: List<ToggleParameter> = emptyList()
+    val parameters: List<ToggleParameter> = emptyList(),
+    val restart: RestartNeed = RestartNeed.NEVER
 )
 
 data class ToggleSection(

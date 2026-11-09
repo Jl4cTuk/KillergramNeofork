@@ -8,6 +8,7 @@ import aether.killergram.neo.ui.components.ModuleUnavailableCard
 import aether.killergram.neo.ui.components.RestartReminderCard
 import aether.killergram.neo.ui.components.ToggleSectionCard
 import aether.killergram.neo.ui.model.ModuleToggle
+import aether.killergram.neo.ui.model.RestartNeed
 import aether.killergram.neo.ui.model.ToggleParameter
 import aether.killergram.neo.ui.model.ToggleParameterType
 import aether.killergram.neo.ui.model.ToggleSection
@@ -74,7 +75,28 @@ fun ModuleToggleScreen(
         sections.flatMap { section -> section.toggles.map { toggle -> toggle.key } }
     }
     val states = rememberToggleStates(keys = allKeys, store = store)
-    var hasChanges by rememberSaveable { mutableStateOf(false) }
+    // Telegram follows the settings while it runs; only some toggles need a restart, and
+    // only while they differ from how Telegram was last started from here.
+    val restartRules = remember(sections) {
+        sections.flatMap { it.toggles }
+            .filter { it.restart != RestartNeed.NEVER }
+            .associate { it.key to it.restart }
+    }
+    // Each such toggle's state before its first change on this screen.
+    var restartBaseline by rememberSaveable { mutableStateOf(HashMap<String, Boolean>()) }
+    val restartNeeded by remember(restartRules) {
+        derivedStateOf {
+            restartRules.any { (key, rule) ->
+                val before = restartBaseline[key] ?: return@any false
+                val now = states[key] ?: false
+                when (rule) {
+                    RestartNeed.ALWAYS -> now != before
+                    RestartNeed.TO_ENABLE -> now && !before
+                    RestartNeed.NEVER -> false
+                }
+            }
+        }
+    }
     val preferredTarget = remember(context) { RestartTargetResolver.resolvePreferredTarget(context) }
     val hasRootAccess by produceState<Boolean?>(initialValue = null, context) {
         value = RootActions.hasRootAccess()
@@ -151,7 +173,6 @@ fun ModuleToggleScreen(
                                 parameter = parameter,
                                 store = store,
                                 onChanged = {
-                                    hasChanges = true
                                     applyStatus = null
                                 }
                             )
@@ -162,7 +183,6 @@ fun ModuleToggleScreen(
                                 store = store,
                                 preferredTargetPackageName = preferredTarget?.packageName,
                                 onChanged = {
-                                    hasChanges = true
                                     applyStatus = null
                                 }
                             )
@@ -172,7 +192,6 @@ fun ModuleToggleScreen(
                                 parameter = parameter,
                                 store = store,
                                 onChanged = {
-                                    hasChanges = true
                                     applyStatus = null
                                 }
                             )
@@ -182,7 +201,6 @@ fun ModuleToggleScreen(
                                 parameter = parameter,
                                 store = store,
                                 onChanged = {
-                                    hasChanges = true
                                     applyStatus = null
                                 }
                             )
@@ -192,7 +210,7 @@ fun ModuleToggleScreen(
             }
 
             Text(
-                text = "Changes require a Telegram restart to take effect.",
+                text = "Changes apply to Telegram right away.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
@@ -212,7 +230,7 @@ fun ModuleToggleScreen(
             return@LazyColumn
         }
 
-        if (hasChanges) {
+        if (restartNeeded) {
             item {
                 RestartReminderCard(
                     appName = preferredTarget?.label,
@@ -239,7 +257,7 @@ fun ModuleToggleScreen(
                                             context,
                                             target.packageName
                                         )
-                                        hasChanges = false
+                                        restartBaseline = HashMap()
                                         "Done. ${target.label} restarted successfully."
                                     } else if (success) {
                                         "Force-stopped ${target.label}, but auto-launch failed."
@@ -255,6 +273,16 @@ fun ModuleToggleScreen(
                     }
                 )
             }
+        }
+
+        item {
+            Text(
+                text = "Changes apply to Telegram right away. Screens that are already open " +
+                    "update once you leave and reopen them.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
         }
 
         item {
@@ -329,9 +357,11 @@ fun ModuleToggleScreen(
                     states = states,
                     onToggleChanged = { key, enabled ->
                         if (states[key] != enabled) {
+                            if (key in restartRules && key !in restartBaseline) {
+                                restartBaseline = HashMap(restartBaseline).apply { put(key, !enabled) }
+                            }
                             states[key] = enabled
                             store.setEnabled(key, enabled)
-                            hasChanges = true
                             applyStatus = null
                         }
                     },

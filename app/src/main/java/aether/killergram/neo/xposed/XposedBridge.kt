@@ -21,23 +21,53 @@ object XposedBridge {
 
     val isReady: Boolean get() = this::framework.isInitialized
 
+    /** Switches a group of hooks on and off while they stay installed. */
+    interface Gate {
+        val isOn: Boolean
+    }
+
+    private val currentGate = ThreadLocal<Gate?>()
+
+    /** The gate that hooks installed on this thread right now belong to. */
+    @JvmStatic
+    val gate: Gate? get() = currentGate.get()
+
+    /**
+     * Runs [block] with [gate] as the current gate: every hook it installs runs its
+     * callbacks only while the gate is on. Callbacks run with their hook's gate, so hooks
+     * installed lazily from inside a callback belong to the same gate.
+     */
+    @JvmStatic
+    fun <T> withGate(gate: Gate?, block: () -> T): T {
+        val previous = currentGate.get()
+        currentGate.set(gate)
+        try {
+            return block()
+        } finally {
+            currentGate.set(previous)
+        }
+    }
+
     @JvmStatic
     fun hookMethod(member: Member, callback: XC_MethodHook): XposedInterface.HookHandle {
         val executable = member as Executable
+        val gate = currentGate.get()
         return framework.hook(executable)
             .setPriority(callback.priority)
             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-            .intercept { chain -> intercept(chain, callback) }
+            .intercept { chain ->
+                if (gate != null && !gate.isOn) chain.proceed() else intercept(chain, callback, gate)
+            }
     }
 
-    private fun intercept(chain: XposedInterface.Chain, callback: XC_MethodHook): Any? {
+    private fun intercept(chain: XposedInterface.Chain, callback: XC_MethodHook, gate: Gate?): Any? {
         val param = XC_MethodHook.MethodHookParam(
             chain.executable,
             chain.thisObject,
             chain.args.toTypedArray(),
         )
         try {
-            callback.callBefore(param)
+            withGate(gate) { callback.callBefore(param) }
         } catch (t: Throwable) {
             log("Error in beforeHookedMethod of ${chain.executable}", t)
             param.returnEarly = false
@@ -55,7 +85,7 @@ object XposedBridge {
         val result = param.result
         val throwable = param.throwable
         try {
-            callback.callAfter(param)
+            withGate(gate) { callback.callAfter(param) }
         } catch (t: Throwable) {
             log("Error in afterHookedMethod of ${chain.executable}", t)
             param.setOutcome(result, throwable)

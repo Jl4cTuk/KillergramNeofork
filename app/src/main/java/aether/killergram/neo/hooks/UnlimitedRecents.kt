@@ -1,13 +1,15 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.Features
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import aether.killergram.neo.xposed.XC_MethodHook
 import aether.killergram.neo.xposed.XposedBridge
 import aether.killergram.neo.xposed.XposedHelpers
 
-fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
-    log("Overriding recent stickers limit to $recentStickersLimit, recent emoji limit to $recentEmojiLimit...")
+/** The limits are read when used, so changing them in the module app applies right away. */
+fun Hooks.unlimitedRecents(recentStickersLimit: () -> Int, recentEmojiLimit: () -> Int) {
+    log("Overriding recent stickers limit to ${recentStickersLimit()}, recent emoji limit to ${recentEmojiLimit()}...")
 
     // MessagesController.maxRecentStickersCount: loaded from the preferences in the
     // constructor, then set from the server's TL_config by updateConfig (on Telegram 13.2+
@@ -18,10 +20,12 @@ fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
         RecentStickersLimit(field, messagesControllerClass.declaredMethods.filter {
             it.parameterTypes.singleOrNull()?.name == TL_CONFIG
         })
-    }.getOrNull() ?: recentStickersLimit(messagesControllerClass)
+    }.getOrNull() ?: findRecentStickersLimit(messagesControllerClass)
     if (limit == null) {
         log("MessagesController.maxRecentStickersCount not found", "ERROR")
     } else {
+        // Telegram's own value per controller, put back when the feature is turned off.
+        val serverLimits = java.util.WeakHashMap<Any, Int>()
         val setLimit = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam?) {
                 param ?: return
@@ -29,11 +33,25 @@ fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
                 val controller = if (messagesControllerClass.isInstance(target)) target
                 else target.javaClass.declaredFields.firstOrNull { it.type == messagesControllerClass }
                     ?.apply { isAccessible = true }?.get(target)
-                controller?.let { limit.field.setInt(it, recentStickersLimit) }
+                controller ?: return
+                val wanted = recentStickersLimit()
+                val current = limit.field.getInt(controller)
+                synchronized(serverLimits) { if (current != wanted) serverLimits[controller] = current }
+                limit.field.setInt(controller, wanted)
             }
         }
         limit.updaters.forEach { XposedBridge.hookMethod(it, setLimit) }
         XposedBridge.hookAllConstructors(messagesControllerClass, setLimit)
+
+        val feature = Features.current
+        Features.onChange {
+            val on = feature?.isOn ?: return@onChange
+            synchronized(serverLimits) {
+                serverLimits.forEach { (controller, serverLimit) ->
+                    limit.field.setInt(controller, if (on) recentStickersLimit() else serverLimit)
+                }
+            }
+        }
     }
 
     // Emoji: the recent emoji list keeps the 48 most used (MAX_RECENT_EMOJI_COUNT) in
@@ -53,7 +71,7 @@ fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
                 val emojiUseHistory = emoji.useHistory.get(null) as HashMap<String, Int>
                 val count = emojiUseHistory[code] ?: 0
 
-                if (count == 0 && emojiUseHistory.size >= recentEmojiLimit) {
+                if (count == 0 && emojiUseHistory.size >= recentEmojiLimit()) {
                     @Suppress("UNCHECKED_CAST")
                     val recentEmoji = emoji.recent.get(null) as ArrayList<String>
                     if (recentEmoji.isNotEmpty()) {
@@ -86,7 +104,8 @@ fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
                         val count2 = emojiUseHistory[rhs] ?: 0
                         count2.compareTo(count1)
                     }
-                    while (recentEmoji.size > recentEmojiLimit) {
+                    val emojiLimit = recentEmojiLimit()
+                    while (recentEmoji.size > emojiLimit) {
                         recentEmoji.removeAt(recentEmoji.size - 1)
                     }
                     param.result = null
@@ -108,7 +127,7 @@ private class RecentStickersLimit(
  * maxRecentStickersCount on obfuscated builds: the controller's int field written right
  * after reading TL_config.stickers_recent_limit, by the method that applies the config.
  */
-private fun Hooks.recentStickersLimit(controller: Class<*>): RecentStickersLimit? {
+private fun Hooks.findRecentStickersLimit(controller: Class<*>): RecentStickersLimit? {
     val updater = TgDeobf.findMethod(lpparam, "applyConfig", "MessagesController.updateConfig") { bridge ->
         bridge.findMethod {
             matcher {

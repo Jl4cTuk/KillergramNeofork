@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.Features
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import aether.killergram.neo.xposed.LoadPackageParam
@@ -117,6 +118,12 @@ fun Hooks.hideTopics() {
         val ctx = context() ?: return false
         HiddenTopics.init(ctx)
         return true
+    }
+
+    // Switched in the module app: open topic lists show or drop the hidden topics.
+    Features.onChange {
+        if (!ensureStore()) return@onChange
+        HiddenTopics.byChat().keys.forEach { chatId -> notifyTopicsChanged(lpparam, chatId) }
     }
 
     // 1. Filter topic lists (getTopics) and remember which chat each topic belongs to.

@@ -16,11 +16,11 @@ The module runs in **two separate processes**:
 1. **Settings app** (`MainActivity`) — standalone Compose UI where users toggle features.
 2. **Xposed hooks** (`MainHook`) — injected into the target Telegram process by the framework (libxposed API 102). Reads the framework's remote preferences and applies hooks conditionally.
 
-Preferences bridge the two processes: the UI keeps them in its own `SharedPreferences` and mirrors every change into the framework's remote preferences (`data/ModuleService`, bound through `XposedServiceHelper` in `KgApp`); the hooks read the remote ones at injection time.
+Preferences bridge the two processes: the UI keeps them in its own `SharedPreferences` and mirrors every change into the framework's remote preferences (`data/ModuleService`, bound through `XposedServiceHelper` in `KgApp`). The remote preferences are live inside Telegram, so settings apply without a restart (see "Live toggles").
 
 ### Package Layout (`app/src/main/java/aether/killergram/neo/`)
 
-- **`MainHook.kt`** — Entry point: an `XposedModule` (libxposed API 102) listed in `src/main/resources/META-INF/xposed/java_init.list`, with `module.prop` and `scope.list` beside it. Installs hooks in `onPackageReady`, reads prefs and conditionally invokes each hook.
+- **`MainHook.kt`** — Entry point: an `XposedModule` (libxposed API 102) listed in `src/main/resources/META-INF/xposed/java_init.list`, with `module.prop` and `scope.list` beside it. In `onPackageReady` it lists every tweak as a `Feature` and hands them to `core/Features`.
 - **`xposed/`** — A thin layer with the legacy `XposedBridge` / `XC_MethodHook` / `XC_MethodReplacement` / `XposedHelpers` shapes on top of the API 102 interceptor chain, so hooks keep the before/after style. `XC_MethodHook` and `XposedHelpers` are Java on purpose: Kotlin callers get platform types, as with the originals.
 - **`hooks/`** — Each feature is a separate file defining an **extension function on `Hooks`** (e.g., `fun Hooks.killStories()`). The `Hooks` class wraps `LoadPackageParam` and provides `loadClass()` for safe class resolution.
 - **`hooks/Hooks.kt`** — Thin wrapper around `LoadPackageParam` with logged class loading.
@@ -33,8 +33,19 @@ Preferences bridge the two processes: the UI keeps them in its own `SharedPrefer
 
 1. Create a new file in `hooks/` with an extension function: `fun Hooks.myNewHook() { ... }`
 2. Add a preference key constant in `PreferenceKeys.kt`.
-3. Register the hook in `MainHook.kt`'s `hooksMap` (maps pref key → hook invocation).
-4. Add a `ModuleToggle` entry in `ToggleCatalog.kt` under the appropriate section.
+3. Register it in `MainHook.kt`'s `features` list: `switch(KEY) { hooks.myNewHook() }`, or a `Feature` with all the keys it reads when it has parameters. Read parameters through the lambdas passed in, when used, not once at install.
+4. Add a `ModuleToggle` entry in `ToggleCatalog.kt` under the appropriate section; set `restart = RestartNeed.TO_ENABLE` or `ALWAYS` only if the tweak can't follow that change while Telegram runs. The settings screen shows its "Restart required" card only while such a toggle differs from its state before the first change on the screen, in the way its `RestartNeed` says.
+
+### Live toggles
+
+Settings apply while Telegram runs (`core/Features.kt`):
+
+- A feature's hooks are installed at startup if it is on, otherwise the first time it is turned on (on the `KG Neo installer` thread; DexKit is reopened and released again). Hooks are never removed.
+- `XposedBridge.withGate` tags every hook installed by a feature with it (also hooks installed later from inside its callbacks). While the feature is off, its hooks call straight through; nothing in the hook code has to check the switch.
+- Hooks that change state once (a field value, a view, a title on screen) register `Features.onChange { }` while being installed, and apply or undo it there when the feature is switched or a parameter changes (`Features.current?.isOn`). Examples: `ReplaceAppTitle`, `UnlimitedRecents`, `CameraHigherBitrate`, `HideTopics`.
+- Hooks shared by several features install under `XposedBridge.withGate(null) { }` and check each feature themselves.
+- What can't follow live: views Telegram already built (they update when the screen is reopened), state only readable at startup (the 13.2 camera fields are found while MessagesController is constructed), and Telegram's typeface cache. Mark such toggles with `RestartNeed` in `ToggleCatalog`.
+- A new module build still needs a Telegram restart: the running process keeps the old module code.
 
 ### Telegram obfuscation
 

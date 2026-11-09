@@ -11,7 +11,8 @@ object ToggleCatalog {
                     title = "Force system fonts",
                     key = PreferenceKeys.FORCE_SYSTEM_TYPEFACE,
                     description = "Uses your system typeface instead of Telegram defaults.",
-                    icon = ToggleIcon.FONT_DOWNLOAD
+                    icon = ToggleIcon.FONT_DOWNLOAD,
+                    restart = RestartNeed.ALWAYS
                 ),
                 ModuleToggle(
                     title = "Replace edited text with icon",
@@ -141,7 +142,8 @@ object ToggleCatalog {
                             ),
                             defaultChoiceValues = setOf("1200")
                         )
-                    )
+                    ),
+                    restart = RestartNeed.TO_ENABLE
                 ),
                 ModuleToggle(
                     title = "Higher video note resolution",
@@ -163,7 +165,8 @@ object ToggleCatalog {
                             ),
                             defaultChoiceValues = setOf("512")
                         )
-                    )
+                    ),
+                    restart = RestartNeed.TO_ENABLE
                 ),
                 ModuleToggle(
                     title = "Default to rear camera",

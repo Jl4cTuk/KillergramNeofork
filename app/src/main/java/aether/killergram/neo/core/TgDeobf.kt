@@ -24,7 +24,10 @@ import java.lang.reflect.Method
  */
 object TgDeobf {
 
-    private val cache = HashMap<String, Any?>()
+    // Hooks are installed on the main thread at startup and on the installer thread when a
+    // feature is turned on later (see Features), while callbacks resolve members too.
+    private val cache: MutableMap<String, Any?> = java.util.Collections.synchronizedMap(HashMap())
+    private val bridgeLock = Any()
 
     @Volatile private var nativeLoaded = false
 
@@ -78,9 +81,11 @@ object TgDeobf {
     private inline fun <T> withBridge(lpparam: LoadPackageParam, block: (DexKitBridge) -> T): T? {
         if (!ensureNativeLoaded()) return null
         return try {
-            val bridge = sharedBridge
-                ?: DexKitBridge.create(lpparam.appInfo.sourceDir).also { sharedBridge = it }
-            block(bridge)
+            synchronized(bridgeLock) {
+                val bridge = sharedBridge
+                    ?: DexKitBridge.create(lpparam.appInfo.sourceDir).also { sharedBridge = it }
+                block(bridge)
+            }
         } catch (t: Throwable) {
             log("DexKit bridge failed: ${t.message}", "ERROR")
             null
@@ -88,7 +93,7 @@ object TgDeobf {
     }
 
     /** Closes the shared DexKit bridge once all hooks are installed. */
-    fun release() {
+    fun release() = synchronized(bridgeLock) {
         runCatching { sharedBridge?.close() }
         sharedBridge = null
     }
