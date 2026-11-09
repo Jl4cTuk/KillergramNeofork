@@ -109,9 +109,12 @@ private fun drawTilePlaceholder(camera: View, canvas: Canvas, appLoaderClass: Cl
 }
 
 private fun loadTileThumb(appLoaderClass: Class<*>?): Bitmap? {
+    // ApplicationLoader.getFilesDirFixed() (obfuscated since Telegram 13.2) is the app's
+    // files dir.
     val filesDir = runCatching {
         XposedHelpers.callStaticMethod(appLoaderClass, "getFilesDirFixed") as? File
-    }.getOrNull() ?: return null
+    }.getOrNull() ?: aether.killergram.neo.xposed.AndroidAppHelper.currentApplication()?.filesDir
+        ?: return null
     val file = File(filesDir, "cthumb.jpg")
     val modified = file.lastModified()
     if (modified == 0L) return null

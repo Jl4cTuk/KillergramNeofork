@@ -599,6 +599,32 @@ object TgDeobf {
         log("DexKit data of ${method.name} unavailable: ${it.message}", "ERROR")
     }.getOrNull()
 
+    /** A field found by a DexKit [query] that must match exactly one field, cached under [key]. */
+    fun findField(
+        lpparam: LoadPackageParam,
+        key: String,
+        label: String,
+        query: (DexKitBridge) -> List<org.luckypray.dexkit.result.FieldData>,
+    ): Field? {
+        val cacheKey = "field:$key"
+        if (cache.containsKey(cacheKey)) return cache[cacheKey] as Field?
+        val resolved = runCatching {
+            withBridge(lpparam) { bridge ->
+                val matches = query(bridge)
+                if (matches.size != 1) {
+                    log("$label: expected 1 match, found ${matches.size}", "ERROR")
+                    return@withBridge null
+                }
+                matches.single().getFieldInstance(lpparam.classLoader)
+            }?.apply { isAccessible = true }
+        }.onFailure {
+            log("$label resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+        cache[cacheKey] = resolved
+        if (resolved != null) log("Resolved $label: ${resolved.declaringClass.name}.${resolved.name}", "DEBUG")
+        return resolved
+    }
+
     /** A method found by a DexKit [query] that must match exactly one method, cached under [key]. */
     fun findMethod(
         lpparam: LoadPackageParam,

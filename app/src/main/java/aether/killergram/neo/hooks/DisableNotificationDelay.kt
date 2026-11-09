@@ -10,6 +10,10 @@ fun Hooks.disableNotificationDelay() {
     log("Disabling stock notification delay...")
 
     val notificationsControllerClass = loadClass("org.telegram.messenger.NotificationsController") ?: return
+    if (notificationsControllerClass.declaredMethods.none { it.name == "scheduleNotificationDelay" }) {
+        disableObfuscatedNotificationDelay(notificationsControllerClass)
+        return
+    }
 
     XposedBridge.hookAllMethods(
         notificationsControllerClass,
@@ -74,3 +78,40 @@ private fun releaseDelayWakelock(controller: Any) {
         log("Failed releasing notification delay wakelock: ${it.message}", "DEBUG")
     }
 }
+
+/**
+ * Telegram 13.2+: scheduleNotificationDelay(onlineReason) is obfuscated. It is the
+ * (boolean) method that logs "delay notification start"; it posts the controller's delay
+ * runnable to the notifications queue 1–3 s later. Running that runnable right away,
+ * on the same queue thread, shows the notification without the delay.
+ */
+private fun Hooks.disableObfuscatedNotificationDelay(controllerClass: Class<*>) {
+    val schedule = method(controllerClass, "scheduleNotificationDelay", 1) {
+        returnType("void")
+        paramTypes("boolean")
+        usingStrings("delay notification start, onlineReason = ")
+    } ?: run {
+        log("NotificationsController.scheduleNotificationDelay not found", "ERROR")
+        return
+    }
+    val delayRunnable = aether.killergram.neo.core.TgDeobf.withMethodData(lpparam, schedule) { data ->
+        data.usingFields
+            .filter { use -> use.usingType.isRead() && use.field.declaredClassName == controllerClass.name }
+            .map { it.field.getFieldInstance(lpparam.classLoader) }
+            .firstOrNull { Runnable::class.java.isAssignableFrom(it.type) }
+    }?.apply { isAccessible = true } ?: run {
+        log("Notification delay runnable not found", "ERROR")
+        return
+    }
+
+    XposedBridge.hookMethod(schedule, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val runnable = delayRunnable.get(param.thisObject) as? Runnable ?: return
+            param.result = null
+            runCatching { runnable.run() }.onFailure {
+                log("Failed to show the delayed notification: ${it.message}", "DEBUG")
+            }
+        }
+    })
+}
+
