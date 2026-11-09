@@ -69,7 +69,7 @@ fun MainScreen() {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Killergram Neo",
+                        text = "Killergram NeoFork",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )

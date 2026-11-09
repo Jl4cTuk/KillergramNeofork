@@ -16,7 +16,7 @@ Download the latest fork release [here.](https://github.com/Jl4cTuk/KillergramNe
 
 * A rooted Android device
 * An Xposed framework with the **modern libxposed API 102** - we recommend [Vector](https://github.com/JingMatrix/Vector) 2.2 or newer
-* Official Telegram 13.2+ (older builds and forks with the original class names work too)
+* Telegram 13.2+ (see [Supported clients](#supported-clients))
 
 ## Features
 
@@ -78,7 +78,10 @@ Download the latest fork release [here.](https://github.com/Jl4cTuk/KillergramNe
 In theory: Any client that is a fork of original [Telegram](https://github.com/DrKLO/Telegram) app.
 
 Has been tested on:
-* **Telegram** - org.telegram.messenger(.web), version `13.1.0`
+* **Telegram** - org.telegram.messenger, version `13.2.1` (module 2.0.0)
+* **Telegram** - org.telegram.messenger(.web), version `13.1.0` (module 1.x)
+
+Since 2.0.0 the module finds Telegram's obfuscated code at runtime and falls back to the original class and member names, so older builds and forks are expected to keep working, but 2.0.0 has only been tested on 13.2.1.
 
 ## FAQ
 
