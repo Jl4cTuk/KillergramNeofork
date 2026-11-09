@@ -15,7 +15,8 @@ Download the latest fork release [here.](https://github.com/Jl4cTuk/KillergramNe
 ## Installation requirements
 
 * A rooted Android device
-* An **Xposed API provider** - we recommend [Vector](https://github.com/JingMatrix/Vector) 
+* An Xposed framework with the **modern libxposed API 102** - we recommend [Vector](https://github.com/JingMatrix/Vector) 2.2 or newer
+* Official Telegram 13.2+ (older builds and forks with the original class names work too)
 
 ## Features
 
