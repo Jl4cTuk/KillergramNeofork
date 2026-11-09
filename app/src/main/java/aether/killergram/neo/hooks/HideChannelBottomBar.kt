@@ -10,7 +10,8 @@ import aether.killergram.neo.xposed.XposedHelpers
 fun Hooks.hideChannelBottomBar() {
     log("Hiding channel bottom action bar...")
 
-    val chatObjectClass = loadClass("org.telegram.messenger.ChatObject")
+    // ChatObject is obfuscated since Telegram 13.2; the checks fall back to TL fields.
+    val chatObjectClass = loadClass("org.telegram.messenger.ChatObject", logOnFailure = false)
     val chatActivityClass = loadClass("org.telegram.ui.ChatActivity", logOnFailure = false)
     if (chatActivityClass == null) {
         hideObfuscatedChannelBottomBar(chatObjectClass)
@@ -200,8 +201,11 @@ private fun isReadOnlyChannel(currentChat: Any?, chatObjectClass: Class<*>?): Bo
             ) as Boolean
         }.getOrDefault(false)
 
+        // ChatObject is obfuscated since Telegram 13.2: channels are the TL_channel*
+        // classes, broadcasts are the ones that are not megagroups.
         else -> runCatching {
-            !XposedHelpers.getBooleanField(currentChat, "megagroup")
+            currentChat.javaClass.simpleName.startsWith("TL_channel") &&
+                !XposedHelpers.getBooleanField(currentChat, "megagroup")
         }.getOrDefault(false)
     }
 
@@ -209,11 +213,14 @@ private fun isReadOnlyChannel(currentChat: Any?, chatObjectClass: Class<*>?): Bo
         return false
     }
 
-    // Do not collapse input island for channel admins who can post.
+    // Do not collapse input island for channel admins who can post (ChatObject.canPost:
+    // the creator, or an admin with the post_messages right).
     val canPost = runCatching {
         chatObjectClass?.let {
             XposedHelpers.callStaticMethod(it, "canPost", currentChat) as Boolean
-        } ?: false
+        } ?: (XposedHelpers.getBooleanField(currentChat, "creator") ||
+            XposedHelpers.getObjectField(currentChat, "admin_rights")
+                ?.let { rights -> XposedHelpers.getBooleanField(rights, "post_messages") } == true)
     }.getOrDefault(false)
 
     return !canPost

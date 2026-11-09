@@ -2,6 +2,7 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
+import aether.killergram.neo.xposed.LoadPackageParam
 import android.graphics.drawable.Drawable
 import android.view.View
 import aether.killergram.neo.xposed.XC_MethodHook
@@ -33,7 +34,7 @@ fun Hooks.replaceAppTitle(mode: String, customText: String, centerTitle: Boolean
             }
 
             trackedBars.add(actionBar)
-            cachedTitle = resolveTitle(mode, customText, dialogsActivityClass.classLoader)
+            cachedTitle = resolveTitle(mode, customText, lpparam)
             applyTitle(actionBar, cachedTitle)
         }
     })
@@ -87,18 +88,11 @@ private fun applyTitle(actionBar: Any, replacement: String?) {
     }
 }
 
-private fun resolveTitle(mode: String, customText: String, classLoader: ClassLoader?): String? {
+private fun resolveTitle(mode: String, customText: String, lpparam: LoadPackageParam): String? {
     return when (mode) {
         "custom" -> customText.ifBlank { null }
         else -> runCatching {
-            val userConfigClass = XposedHelpers.findClass(
-                "org.telegram.messenger.UserConfig", classLoader
-            )
-            val selectedAccount = XposedHelpers.getStaticIntField(userConfigClass, "selectedAccount")
-            val instance = XposedHelpers.callStaticMethod(
-                userConfigClass, "getInstance", selectedAccount
-            )
-            val user = XposedHelpers.callMethod(instance, "getCurrentUser")
+            val user = TgDeobf.currentUser(lpparam) ?: error("current user unknown")
             XposedHelpers.getObjectField(user, "first_name") as? String
         }.getOrElse {
             log("replaceAppTitle: failed to get first name: ${it.message}", "ERROR")
@@ -161,7 +155,7 @@ private fun Hooks.replaceObfuscatedAppTitle(mode: String, customText: String) {
             runCatching {
                 val fragment = param.thisObject ?: return
                 if (!isMainChatList(fragment)) return
-                val title = resolveTitle(mode, customText, fragment.javaClass.classLoader) ?: return
+                val title = resolveTitle(mode, customText, lpparam) ?: return
                 val actionBar = XposedHelpers.getObjectField(fragment, "actionBar") ?: return
 
                 val setter = generateSequence<Class<*>>(actionBar.javaClass) { it.superclass }

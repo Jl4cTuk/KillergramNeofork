@@ -357,6 +357,56 @@ object TgDeobf {
     }
 
     /**
+     * LocaleController's getString(id): by name on older builds; since Telegram 13.2 the
+     * static (int, String) -> String method with the most callers (the fallback key is
+     * passed as null).
+     */
+    fun getStringMethod(lpparam: LoadPackageParam): Method? {
+        if (cache.containsKey(KEY_GET_STRING)) return cache[KEY_GET_STRING] as Method?
+        val localeController = localeController(lpparam)
+        val resolved = localeController?.let { lc ->
+            lc.declaredMethods.singleOrNull {
+                it.name == "getString" && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+            } ?: withBridge(lpparam) { bridge ->
+                lc.declaredMethods.filter {
+                    java.lang.reflect.Modifier.isStatic(it.modifiers) && it.returnType == String::class.java &&
+                        it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType, String::class.java))
+                }.maxByOrNull { bridge.getMethodData(it)?.callers?.size ?: 0 }
+            }
+        }?.apply { isAccessible = true }
+        cache[KEY_GET_STRING] = resolved
+        if (resolved != null) {
+            log("Resolved LocaleController.getString: ${resolved.name}", "DEBUG")
+        } else {
+            log("Failed to resolve LocaleController.getString", "ERROR")
+        }
+        return resolved
+    }
+
+    /** A Telegram string by its resource name, in the app language. */
+    fun string(lpparam: LoadPackageParam, name: String): String? = runCatching {
+        val method = getStringMethod(lpparam) ?: return null
+        val id = resId(lpparam, "string", name)
+        if (id == 0) return null
+        val args: Array<Any?> = if (method.parameterTypes.size == 1) arrayOf(id) else arrayOf(id, null)
+        method.invoke(null, *args) as? String
+    }.getOrNull()
+
+    /**
+     * The signed-in user of the selected account: UserConfig.getCurrentUser(), on
+     * obfuscated builds UserConfig's only TLRPC.User field.
+     */
+    fun currentUser(lpparam: LoadPackageParam): Any? = runCatching {
+        val userConfigClass = userConfig(lpparam) ?: return null
+        val userConfig = instance(userConfigClass, selectedAccount(lpparam)) ?: return null
+        runCatching { XposedHelpers.callMethod(userConfig, "getCurrentUser") }.getOrNull()
+            ?: userConfigClass.declaredFields.singleOrNull {
+                it.type.name == "org.telegram.tgnet.TLRPC\$User" &&
+                    !java.lang.reflect.Modifier.isStatic(it.modifiers)
+            }?.apply { isAccessible = true }?.get(userConfig)
+    }.getOrNull()
+
+    /**
      * The TopicsController members the topic hiding needs. Since Telegram 13.2
      * getForumUnreadCount fills a static int[5] instead of returning it
      * ([forumUnreadCounts]).
@@ -537,6 +587,26 @@ object TgDeobf {
         }
         return resolved
     }
+
+    /** Runs [block] on DexKit's data of [method] (its field uses, invokes, callers). */
+    fun <T> withMethodData(
+        lpparam: LoadPackageParam,
+        method: Method,
+        block: (MethodData) -> T?,
+    ): T? = runCatching {
+        withBridge(lpparam) { bridge -> bridge.getMethodData(method)?.let(block) }
+    }.onFailure {
+        log("DexKit data of ${method.name} unavailable: ${it.message}", "ERROR")
+    }.getOrNull()
+
+    /** A method found by a DexKit [query] that must match exactly one method, cached under [key]. */
+    fun findMethod(
+        lpparam: LoadPackageParam,
+        key: String,
+        label: String,
+        optional: Boolean = false,
+        query: (DexKitBridge) -> List<MethodData>,
+    ): Method? = cachedMethod(lpparam, key, label, optional, query)
 
     /**
      * ChatMessageCell's measureTime(MessageObject): builds the time string beside the
@@ -1337,6 +1407,7 @@ object TgDeobf {
 
     private const val KEY_ENUM_SETTING = "enumSetting"
     private const val KEY_TOPICS_API = "topicsApi"
+    private const val KEY_GET_STRING = "getString"
     private const val KEY_INSTANT_CAMERA = "instantCamera"
     private const val KEY_ITEM_OPTIONS = "itemOptions"
     private const val KEY_TOPICS_LIST = "topicsList"

@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import aether.killergram.neo.xposed.XC_MethodHook
 import aether.killergram.neo.xposed.XposedBridge
@@ -16,7 +17,8 @@ import aether.killergram.neo.xposed.XposedHelpers
 fun Hooks.defaultHdMediaSending() {
     log("Enabling default HD media sending...")
 
-    val editStateClass = loadClass("org.telegram.messenger.MediaController\$MediaEditState") ?: return
+    val editStateClass = loadClass("org.telegram.messenger.MediaController\$MediaEditState", logOnFailure = false)
+        ?: return defaultObfuscatedHdMediaSending()
     val highQualityField = runCatching {
         XposedHelpers.findField(editStateClass, "highQuality")
     }.getOrNull()
@@ -62,4 +64,49 @@ fun Hooks.defaultHdMediaSending() {
             }
         }
     )
+}
+
+/**
+ * Telegram 13.2+: MediaEditState is obfuscated. Its isHighQuality() falls back to the
+ * "photoHighQualityDefault" setting (a static SharedConfig flag) while the entry's own
+ * Boolean is unset; answering true there is that setting turned on.
+ */
+private fun Hooks.defaultObfuscatedHdMediaSending() {
+    val sharedConfig = TgDeobf.sharedConfig(lpparam) ?: return
+    var highQualityField: java.lang.reflect.Field? = null
+    val isHighQuality = TgDeobf.findMethod(lpparam, "isHighQuality", "MediaEditState.isHighQuality") { bridge ->
+        bridge.findMethod {
+            matcher {
+                returnType("boolean")
+                paramCount(0)
+                invokeMethods {
+                    add {
+                        declaredClass("java.lang.Boolean")
+                        name("booleanValue")
+                    }
+                }
+            }
+        }.filter { method ->
+            method.usingFields.any {
+                it.field.declaredClassName == sharedConfig.name && it.field.typeName == "boolean"
+            } && method.usingFields.any {
+                it.field.declaredClassName == method.className && it.field.typeName == "java.lang.Boolean"
+            } &&
+                // MediaEditState is the base of PhotoEntry and SearchImage.
+                bridge.findClass { matcher { superClass(method.className) } }.isNotEmpty()
+        }.also { matches ->
+            matches.singleOrNull()?.usingFields?.firstOrNull { it.field.typeName == "java.lang.Boolean" }
+                ?.let { highQualityField = it.field.getFieldInstance(lpparam.classLoader).apply { isAccessible = true } }
+        }
+    }
+    val field = highQualityField ?: isHighQuality?.declaringClass?.declaredFields?.singleOrNull {
+        it.type == java.lang.Boolean::class.java
+    }?.apply { isAccessible = true }
+
+    hook(isHighQuality, "MediaEditState.isHighQuality", object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            val state = param.thisObject ?: return
+            if (field?.get(state) == null) param.result = true
+        }
+    })
 }

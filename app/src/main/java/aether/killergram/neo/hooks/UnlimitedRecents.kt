@@ -1,5 +1,6 @@
 package aether.killergram.neo.hooks
 
+import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import aether.killergram.neo.xposed.XC_MethodHook
 import aether.killergram.neo.xposed.XposedBridge
@@ -8,50 +9,56 @@ import aether.killergram.neo.xposed.XposedHelpers
 fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
     log("Overriding recent stickers limit to $recentStickersLimit, recent emoji limit to $recentEmojiLimit...")
 
-    // Override maxRecentStickersCount on MessagesController
+    // MessagesController.maxRecentStickersCount: loaded from the preferences in the
+    // constructor, then set from the server's TL_config by updateConfig (on Telegram 13.2+
+    // a lambda that captures the controller).
     val messagesControllerClass = loadClass("org.telegram.messenger.MessagesController") ?: return
-
-    XposedBridge.hookAllMethods(
-        messagesControllerClass,
-        "updateConfig",
-        object : XC_MethodHook() {
+    val limit = runCatching {
+        val field = XposedHelpers.findField(messagesControllerClass, "maxRecentStickersCount")
+        RecentStickersLimit(field, messagesControllerClass.declaredMethods.filter {
+            it.parameterTypes.singleOrNull()?.name == TL_CONFIG
+        })
+    }.getOrNull() ?: recentStickersLimit(messagesControllerClass)
+    if (limit == null) {
+        log("MessagesController.maxRecentStickersCount not found", "ERROR")
+    } else {
+        val setLimit = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam?) {
                 param ?: return
-                XposedHelpers.setIntField(param.thisObject, "maxRecentStickersCount", recentStickersLimit)
+                val target = param.thisObject ?: return
+                val controller = if (messagesControllerClass.isInstance(target)) target
+                else target.javaClass.declaredFields.firstOrNull { it.type == messagesControllerClass }
+                    ?.apply { isAccessible = true }?.get(target)
+                controller?.let { limit.field.setInt(it, recentStickersLimit) }
             }
         }
-    )
+        limit.updaters.forEach { XposedBridge.hookMethod(it, setLimit) }
+        XposedBridge.hookAllConstructors(messagesControllerClass, setLimit)
+    }
 
-    XposedBridge.hookAllConstructors(
-        messagesControllerClass,
-        object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam?) {
-                param ?: return
-                XposedHelpers.setIntField(param.thisObject, "maxRecentStickersCount", recentStickersLimit)
-            }
-        }
-    )
+    // Emoji: the recent emoji list keeps the 48 most used (MAX_RECENT_EMOJI_COUNT) in
+    // addRecentEmoji and sortEmoji; both are replaced to keep [recentEmojiLimit].
+    val emoji = recentEmojiApi() ?: run {
+        log("Recent emoji methods not found", "ERROR")
+        return
+    }
 
-    // Override MAX_RECENT_EMOJI_COUNT in Emoji class by replacing addRecentEmoji and sortEmoji
-    val emojiClass = loadClass("org.telegram.messenger.Emoji") ?: return
-
-    XposedBridge.hookAllMethods(
-        emojiClass,
-        "addRecentEmoji",
+    XposedBridge.hookMethod(
+        emoji.addRecentEmoji,
         object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam?) {
                 param ?: return
                 val code = param.args[0] as String
                 @Suppress("UNCHECKED_CAST")
-                val emojiUseHistory = XposedHelpers.getStaticObjectField(emojiClass, "emojiUseHistory") as HashMap<String, Int>
+                val emojiUseHistory = emoji.useHistory.get(null) as HashMap<String, Int>
                 val count = emojiUseHistory[code] ?: 0
 
                 if (count == 0 && emojiUseHistory.size >= recentEmojiLimit) {
                     @Suppress("UNCHECKED_CAST")
-                    val recentEmoji = XposedHelpers.getStaticObjectField(emojiClass, "recentEmoji") as ArrayList<String>
+                    val recentEmoji = emoji.recent.get(null) as ArrayList<String>
                     if (recentEmoji.isNotEmpty()) {
-                        val emoji = recentEmoji[recentEmoji.size - 1]
-                        emojiUseHistory.remove(emoji)
+                        val last = recentEmoji[recentEmoji.size - 1]
+                        emojiUseHistory.remove(last)
                         recentEmoji[recentEmoji.size - 1] = code
                     }
                 }
@@ -61,27 +68,127 @@ fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
         }
     )
 
-    XposedBridge.hookAllMethods(
-        emojiClass,
-        "sortEmoji",
-        object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam?) {
-                param ?: return
-                @Suppress("UNCHECKED_CAST")
-                val recentEmoji = XposedHelpers.getStaticObjectField(emojiClass, "recentEmoji") as ArrayList<String>
-                @Suppress("UNCHECKED_CAST")
-                val emojiUseHistory = XposedHelpers.getStaticObjectField(emojiClass, "emojiUseHistory") as HashMap<String, Int>
+    emoji.sortEmoji?.let { sortEmoji ->
+        XposedBridge.hookMethod(
+            sortEmoji,
+            object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam?) {
+                    param ?: return
+                    @Suppress("UNCHECKED_CAST")
+                    val recentEmoji = emoji.recent.get(null) as ArrayList<String>
+                    @Suppress("UNCHECKED_CAST")
+                    val emojiUseHistory = emoji.useHistory.get(null) as HashMap<String, Int>
 
-                recentEmoji.sortWith { lhs, rhs ->
-                    val count1 = emojiUseHistory[lhs] ?: 0
-                    val count2 = emojiUseHistory[rhs] ?: 0
-                    count2.compareTo(count1)
+                    recentEmoji.clear()
+                    recentEmoji.addAll(emojiUseHistory.keys)
+                    recentEmoji.sortWith { lhs, rhs ->
+                        val count1 = emojiUseHistory[lhs] ?: 0
+                        val count2 = emojiUseHistory[rhs] ?: 0
+                        count2.compareTo(count1)
+                    }
+                    while (recentEmoji.size > recentEmojiLimit) {
+                        recentEmoji.removeAt(recentEmoji.size - 1)
+                    }
+                    param.result = null
                 }
-                while (recentEmoji.size > recentEmojiLimit) {
-                    recentEmoji.removeAt(recentEmoji.size - 1)
-                }
-                param.result = null
+            }
+        )
+    } ?: log("Emoji.sortEmoji not found — recent emoji stay trimmed to 48 on reload", "ERROR")
+}
+
+private const val TL_CONFIG = "org.telegram.tgnet.TLRPC\$TL_config"
+private const val MAX_RECENT_EMOJI = 48
+
+private class RecentStickersLimit(
+    val field: java.lang.reflect.Field,
+    val updaters: List<java.lang.reflect.Method>,
+)
+
+/**
+ * maxRecentStickersCount on obfuscated builds: the controller's int field written right
+ * after reading TL_config.stickers_recent_limit, by the method that applies the config.
+ */
+private fun Hooks.recentStickersLimit(controller: Class<*>): RecentStickersLimit? {
+    val updater = TgDeobf.findMethod(lpparam, "applyConfig", "MessagesController.updateConfig") { bridge ->
+        bridge.findMethod {
+            matcher {
+                addUsingField(
+                    "L${TL_CONFIG.replace('.', '/')};->stickers_recent_limit:I",
+                    org.luckypray.dexkit.query.enums.UsingType.Read
+                )
+            }
+        }.filter { !it.className.startsWith("org.telegram.tgnet.") }  // TL_config's own (de)serializer
+    } ?: return null
+    val field = TgDeobf.withMethodData(lpparam, updater) { data ->
+        val fields = data.usingFields
+        val read = fields.indexOfFirst {
+            it.usingType.isRead() && it.field.name == "stickers_recent_limit"
+        }
+        if (read < 0) return@withMethodData null
+        fields.drop(read + 1).firstOrNull {
+            !it.usingType.isRead() && it.field.declaredClassName == controller.name &&
+                it.field.typeName == "int"
+        }?.field?.getFieldInstance(lpparam.classLoader)
+    }?.apply { isAccessible = true } ?: return null
+    return RecentStickersLimit(field, listOf(updater))
+}
+
+private class RecentEmoji(
+    val addRecentEmoji: java.lang.reflect.Method,
+    val sortEmoji: java.lang.reflect.Method?,
+    val useHistory: java.lang.reflect.Field,
+    val recent: java.lang.reflect.Field,
+)
+
+/**
+ * Emoji.addRecentEmoji(String): the static (String) method that caps the use history at
+ * 48; its static HashMap and ArrayList are emojiUseHistory and recentEmoji. sortEmoji()
+ * is the class's static no-arg method that sorts and trims to 48.
+ */
+private fun Hooks.recentEmojiApi(): RecentEmoji? {
+    loadClass("org.telegram.messenger.Emoji", logOnFailure = false)?.let { emojiClass ->
+        return runCatching {
+            RecentEmoji(
+                emojiClass.getDeclaredMethod("addRecentEmoji", String::class.java),
+                emojiClass.getDeclaredMethod("sortEmoji"),
+                XposedHelpers.findField(emojiClass, "emojiUseHistory"),
+                XposedHelpers.findField(emojiClass, "recentEmoji"),
+            )
+        }.getOrNull()
+    }
+    val add = TgDeobf.findMethod(lpparam, "addRecentEmoji", "Emoji.addRecentEmoji") { bridge ->
+        bridge.findMethod {
+            matcher {
+                modifiers(java.lang.reflect.Modifier.STATIC)
+                returnType("void")
+                paramTypes("java.lang.String")
+                usingNumbers(MAX_RECENT_EMOJI)
+                invokeMethods { add { declaredClass("java.util.HashMap"); name("put") } }
             }
         }
+    } ?: return null
+    val emojiClass = add.declaringClass
+    val fields = TgDeobf.withMethodData(lpparam, add) { data ->
+        data.usingFields.map { it.field.getFieldInstance(lpparam.classLoader) }
+    }.orEmpty().filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && it.declaringClass == emojiClass }
+    val history = fields.firstOrNull { it.type == HashMap::class.java } ?: return null
+    val recent = fields.firstOrNull { it.type == ArrayList::class.java } ?: return null
+    val sort = TgDeobf.findMethod(lpparam, "sortEmoji", "Emoji.sortEmoji") { bridge ->
+        bridge.findMethod {
+            matcher {
+                declaredClass(emojiClass.name)
+                modifiers(java.lang.reflect.Modifier.STATIC)
+                returnType("void")
+                paramCount(0)
+                usingNumbers(MAX_RECENT_EMOJI)
+                invokeMethods { add { declaredClass("java.util.Collections"); name("sort") } }
+            }
+        }
+    }
+    return RecentEmoji(
+        add,
+        sort,
+        history.apply { isAccessible = true },
+        recent.apply { isAccessible = true },
     )
 }

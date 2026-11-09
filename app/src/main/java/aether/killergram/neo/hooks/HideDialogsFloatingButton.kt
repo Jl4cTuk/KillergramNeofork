@@ -142,18 +142,8 @@ private fun removeFloatingButtons(fragment: Any, storyButtonLabel: String?) {
     }
 }
 
-/** Resolves a Telegram string by resource name through the kept LocaleController. */
+/** A Telegram string by resource name, read when called (the app language may change). */
 private fun Hooks.telegramString(name: String): (() -> String?)? {
-    val localeController = loadClass("org.telegram.messenger.LocaleController") ?: return null
-    val id = runCatching {
-        XposedHelpers.getStaticIntField(
-            XposedHelpers.findClass("org.telegram.messenger.R\$string", lpparam.classLoader),
-            name
-        )
-    }.getOrNull() ?: return null
-    return {
-        runCatching {
-            XposedHelpers.callStaticMethod(localeController, "getString", id) as? String
-        }.getOrNull()
-    }
+    TgDeobf.getStringMethod(lpparam) ?: return null
+    return { TgDeobf.string(lpparam, name) }
 }

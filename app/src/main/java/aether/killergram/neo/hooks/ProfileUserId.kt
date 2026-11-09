@@ -204,8 +204,7 @@ private const val PROBE_ADAPTER_FIELD = "kg_user_id_probe_adapter"
 
 private fun Hooks.showObfuscatedProfileUserId(profileActivityClass: Class<*>) {
     val rows = TgDeobf.profileRows(lpparam, profileActivityClass) ?: return
-    val androidUtilitiesClass = loadClass("org.telegram.messenger.AndroidUtilities")
-    val chatObjectClass = loadClass("org.telegram.messenger.ChatObject")
+    val chatObjectClass = loadClass("org.telegram.messenger.ChatObject", logOnFailure = false)
 
     XposedBridge.hookMethod(rows.updateRowsIds, object : XC_MethodHook() {
         override fun afterHookedMethod(param: MethodHookParam) {
@@ -289,8 +288,10 @@ private fun Hooks.showObfuscatedProfileUserId(profileActivityClass: Class<*>) {
                 val profileActivity = param.args[0] ?: return
                 if (param.args[positionIndex] != getSyntheticUserIdRow(profileActivity)) return
                 val id = resolveObfuscatedProfileId(profileActivity, chatObjectClass)
+                val clipContext = (param.args[positionIndex - 1] as? View)?.context
                 runCatching {
-                    XposedHelpers.callStaticMethod(androidUtilitiesClass, "addToClipboard", id.toString())
+                    val clipboard = clipContext?.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("label", id.toString()))
                 }
                 // Android 13+ confirms clipboard writes itself.
                 if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -394,13 +395,17 @@ private fun resolveObfuscatedProfileId(profileActivity: Any, chatObjectClass: Cl
     if (chatId == 0L) return 0L
 
     val isChannel = runCatching {
-        val account = XposedHelpers.getIntField(profileActivity, "currentAccount")
-        val controllerClass = XposedHelpers.findClass(
-            "org.telegram.messenger.MessagesController", profileActivity.javaClass.classLoader
-        )
-        val controller = XposedHelpers.callStaticMethod(controllerClass, "getInstance", account)
-        val chat = XposedHelpers.callMethod(controller, "getChat", chatId)
-        XposedHelpers.callStaticMethod(chatObjectClass, "isChannel", chat) as Boolean
+        // getMessagesController() is kept on every screen; getChat(Long) is its only
+        // (Long) -> TLRPC.Chat method.
+        val controller = XposedHelpers.callMethod(profileActivity, "getMessagesController")
+        val getChat = controller.javaClass.declaredMethods.single {
+            it.returnType.name == "org.telegram.tgnet.TLRPC\$Chat" &&
+                it.parameterTypes.contentEquals(arrayOf(java.lang.Long::class.java))
+        }.apply { isAccessible = true }
+        val chat = getChat.invoke(controller, chatId)
+        chatObjectClass?.let { XposedHelpers.callStaticMethod(it, "isChannel", chat) as Boolean }
+            // ChatObject.isChannel: channels and supergroups are the TL_channel* classes.
+            ?: (chat?.javaClass?.simpleName?.startsWith("TL_channel") == true)
     }.getOrDefault(false)
     return if (isChannel) -(CHANNEL_ID_SHIFT + chatId) else -chatId
 }
