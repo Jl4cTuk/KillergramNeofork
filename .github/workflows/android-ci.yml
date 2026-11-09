@@ -145,6 +145,10 @@ jobs:
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           generate_release_notes: true
+          # A tag with a pre-release suffix (v2.0.0-rc.1) is published as a pre-release,
+          # which never becomes the repository's latest release.
+          prerelease: ${{ contains(github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name, '-') }}
           files: app/build/outputs/apk/release/app-release.apk
 
       - name: Upload release APK
