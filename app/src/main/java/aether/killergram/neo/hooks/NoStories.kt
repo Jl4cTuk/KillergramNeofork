@@ -2,27 +2,26 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XC_MethodReplacement
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XC_MethodReplacement
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 fun Hooks.killStories() {
     log("Disabling stories...")
 
-    // Account-wide gate in org.telegram.messenger.* (R8 keeps the name) — obfuscation-proof.
-    val messagesControllerClass = loadClass("org.telegram.messenger.MessagesController") ?: return
-    XposedBridge.hookAllMethods(
-        messagesControllerClass,
-        "storiesEnabled",
-        XC_MethodReplacement.returnConstant(false)
-    )
+    // Account-wide gate: storiesEnabled() hides story posting. Only builds that keep the
+    // name have it hooked; in obfuscated ones it can't be told from storyEntitiesAllowed(),
+    // and emptying the story lists below is enough to hide stories.
+    loadClass("org.telegram.messenger.MessagesController")?.let { messagesController ->
+        XposedBridge.hookAllMethods(
+            messagesController,
+            "storiesEnabled",
+            XC_MethodReplacement.returnConstant(false)
+        )
+    }
 
-    // StoriesController lives in an obfuscated package in Telegram 12.10.2+, but the kept
-    // MessagesController.getStoriesController() returns it, so its class is always known.
-    val storiesControllerClass = runCatching {
-        messagesControllerClass.getDeclaredMethod("getStoriesController").returnType
-    }.getOrNull()
+    val storiesControllerClass = TgDeobf.storiesController(lpparam)
     if (storiesControllerClass == null) {
         log("StoriesController not found — story bar stays visible", "ERROR")
         return

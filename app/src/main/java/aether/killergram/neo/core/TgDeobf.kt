@@ -2,8 +2,8 @@ package aether.killergram.neo.core
 
 import aether.killergram.neo.MainHook
 import aether.killergram.neo.log
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam
+import aether.killergram.neo.xposed.XposedHelpers
+import aether.killergram.neo.xposed.LoadPackageParam
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.UsingType
 import org.luckypray.dexkit.result.MethodData
@@ -93,6 +93,246 @@ object TgDeobf {
         sharedBridge = null
     }
 
+    // ---------------------------------------------------------------------------------
+    // Resources. Up to Telegram 13.1 code read ids from the kept org.telegram.messenger.R
+    // classes (sget, the fields are not final). Since 13.2 R8 inlines them as constants,
+    // so a fingerprint matches the id number, resolved here by name.
+    // ---------------------------------------------------------------------------------
+
+    private var stringIds: Map<Int, Int>? = null
+    private var packageResources: android.content.res.Resources? = null
+
+    /** Whether code reads resource ids from R fields (Telegram 13.1 and older). */
+    private fun hasRField(lpparam: LoadPackageParam, type: String, name: String): Boolean {
+        val key = "rfield:$type/$name"
+        if (cache.containsKey(key)) return cache[key] as Boolean
+        val found = runCatching {
+            XposedHelpers.findClassIfExists("org.telegram.messenger.R\$$type", lpparam.classLoader)
+                ?.getDeclaredField(name) != null
+        }.getOrDefault(false)
+        cache[key] = found
+        return found
+    }
+
+    /**
+     * Resource id by name. Drawables and other packaged resources come from Telegram's
+     * own Resources. Since 13.2 strings are not packaged resources: Telegram maps their
+     * ids to the hash of the string key in assets/string_resource_ids.bin
+     * (count, then id/key.hashCode() pairs, little endian int32).
+     */
+    fun resId(lpparam: LoadPackageParam, type: String, name: String): Int {
+        val key = "res:$type/$name"
+        if (cache.containsKey(key)) return cache[key] as Int
+        val id = runCatching {
+            if (type == "string") {
+                stringResourceIds(lpparam)[name.hashCode()]
+                    ?: resources(lpparam)?.getIdentifier(name, type, lpparam.packageName)
+            } else {
+                resources(lpparam)?.getIdentifier(name, type, lpparam.packageName)
+            }
+        }.onFailure {
+            log("Resource $type/$name lookup failed: ${it.message}", "ERROR")
+        }.getOrNull() ?: 0
+        cache[key] = id
+        if (id == 0) log("Resource $type/$name not found", "ERROR")
+        return id
+    }
+
+    private fun stringResourceIds(lpparam: LoadPackageParam): Map<Int, Int> {
+        stringIds?.let { return it }
+        val result = HashMap<Int, Int>()
+        runCatching {
+            java.util.zip.ZipFile(lpparam.appInfo.sourceDir).use { zip ->
+                val entry = zip.getEntry("assets/string_resource_ids.bin") ?: return@use
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val count = buffer.int
+                repeat(count) {
+                    val id = buffer.int
+                    val hash = buffer.int
+                    // Keyed by hash; a collision drops the name rather than guess.
+                    if (result.containsKey(hash)) result[hash] = 0 else result[hash] = id
+                }
+            }
+        }.onFailure {
+            log("string_resource_ids.bin unreadable: ${it.message}", "DEBUG")
+        }
+        result.values.removeAll { it == 0 }
+        stringIds = result
+        return result
+    }
+
+    private fun resources(lpparam: LoadPackageParam): android.content.res.Resources? {
+        packageResources?.let { return it }
+        return runCatching {
+            val thread = Class.forName("android.app.ActivityThread")
+                .getMethod("currentActivityThread").invoke(null)
+            val system = thread.javaClass.getMethod("getSystemContext").invoke(thread) as android.content.Context
+            system.createPackageContext(lpparam.packageName, android.content.Context.CONTEXT_IGNORE_SECURITY)
+                .resources
+        }.onFailure {
+            log("Telegram resources unavailable: ${it.message}", "ERROR")
+        }.getOrNull()?.also { packageResources = it }
+    }
+
+    /** Matches code that reads resource [type]/[name], as an R field read or an inlined id. */
+    fun org.luckypray.dexkit.query.matchers.MethodMatcher.readsRes(
+        lpparam: LoadPackageParam,
+        type: String,
+        name: String,
+    ) {
+        if (hasRField(lpparam, type, name)) {
+            addUsingField("Lorg/telegram/messenger/R\$$type;->$name:I", UsingType.Read)
+        } else {
+            addUsingNumber(resId(lpparam, type, name))
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Since Telegram 13.2 org.telegram.messenger.* is R8-obfuscated too (classes and
+    // members). Only a few names survive: BaseController's getters (getMessagesController,
+    // getUserConfig, …) and its currentAccount field, ApplicationLoaderImpl (the manifest
+    // Application), and the TL classes in org.telegram.tgnet with their fields.
+    // A class is looked up by its real name first, so older builds keep working.
+    // ---------------------------------------------------------------------------------
+
+    private fun cachedClass(key: String, resolve: () -> Class<*>?): Class<*>? {
+        if (cache.containsKey(key)) return cache[key] as Class<*>?
+        val resolved = runCatching(resolve).onFailure {
+            log("$key resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+        cache[key] = resolved
+        if (resolved != null) {
+            log("Resolved $key: ${resolved.name}", "DEBUG")
+        } else {
+            log("Failed to resolve $key", "ERROR")
+        }
+        return resolved
+    }
+
+    private fun byName(lpparam: LoadPackageParam, name: String): Class<*>? =
+        XposedHelpers.findClassIfExists(name, lpparam.classLoader)
+
+    /** BaseController: the account-bound base of every messenger controller. */
+    fun baseController(lpparam: LoadPackageParam): Class<*>? =
+        cachedClass("BaseController") {
+            byName(lpparam, "org.telegram.messenger.BaseController") ?: withBridge(lpparam) { bridge ->
+                bridge.findClass {
+                    searchPackages("org.telegram.messenger")
+                    matcher {
+                        fields { add { name("currentAccount") } }
+                        methods {
+                            add { name("getMessagesController"); paramCount(0) }
+                            add { name("getUserConfig"); paramCount(0) }
+                            add { name("getMessagesStorage"); paramCount(0) }
+                        }
+                    }
+                }.singleOrNull()?.getInstance(lpparam.classLoader)
+            }
+        }
+
+    /** A controller class by its BaseController getter, e.g. "getMessagesController". */
+    private fun controller(lpparam: LoadPackageParam, getter: String, name: String): Class<*>? =
+        cachedClass(name.substringAfterLast('.')) {
+            byName(lpparam, name) ?: baseController(lpparam)?.getMethod(getter)?.returnType
+        }
+
+    fun messagesController(lpparam: LoadPackageParam) =
+        controller(lpparam, "getMessagesController", "org.telegram.messenger.MessagesController")
+
+    fun messagesStorage(lpparam: LoadPackageParam) =
+        controller(lpparam, "getMessagesStorage", "org.telegram.messenger.MessagesStorage")
+
+    fun userConfig(lpparam: LoadPackageParam) =
+        controller(lpparam, "getUserConfig", "org.telegram.messenger.UserConfig")
+
+    fun notificationCenter(lpparam: LoadPackageParam) =
+        controller(lpparam, "getNotificationCenter", "org.telegram.messenger.NotificationCenter")
+
+    fun notificationsController(lpparam: LoadPackageParam) =
+        controller(lpparam, "getNotificationsController", "org.telegram.messenger.NotificationsController")
+
+    fun sendMessagesHelper(lpparam: LoadPackageParam) =
+        controller(lpparam, "getSendMessagesHelper", "org.telegram.messenger.SendMessagesHelper")
+
+    fun mediaDataController(lpparam: LoadPackageParam) =
+        controller(lpparam, "getMediaDataController", "org.telegram.messenger.MediaDataController")
+
+    fun accountInstance(lpparam: LoadPackageParam) =
+        controller(lpparam, "getAccountInstance", "org.telegram.messenger.AccountInstance")
+
+    /** ApplicationLoader: the superclass of the manifest's ApplicationLoaderImpl. */
+    fun applicationLoader(lpparam: LoadPackageParam): Class<*>? =
+        cachedClass("ApplicationLoader") {
+            byName(lpparam, "org.telegram.messenger.ApplicationLoader")
+                ?: byName(lpparam, "org.telegram.messenger.ApplicationLoaderImpl")?.superclass
+        }
+
+    /** ApplicationLoader.applicationContext: its only static Context field. */
+    fun applicationContext(lpparam: LoadPackageParam): android.content.Context? {
+        val loader = applicationLoader(lpparam) ?: return null
+        val field = runCatching { loader.getDeclaredField("applicationContext") }.getOrNull()
+            ?: loader.declaredFields.singleOrNull {
+                java.lang.reflect.Modifier.isStatic(it.modifiers) &&
+                    it.type == android.content.Context::class.java
+            }
+        return runCatching {
+            field?.apply { isAccessible = true }?.get(null) as? android.content.Context
+        }.getOrNull()
+    }
+
+    /**
+     * A class that once had a kept name: [name] first, then the single class whose code
+     * uses all of [strings].
+     */
+    fun classByStrings(lpparam: LoadPackageParam, name: String, vararg strings: String): Class<*>? =
+        cachedClass(name.substringAfterLast('.')) {
+            byName(lpparam, name) ?: withBridge(lpparam) { bridge ->
+                bridge.findClass {
+                    matcher { usingStrings(*strings) }
+                }.singleOrNull()?.getInstance(lpparam.classLoader)
+            }
+        }
+
+    fun messageObject(lpparam: LoadPackageParam) = classByStrings(
+        lpparam, "org.telegram.messenger.MessageObject",
+        "BoostingStarsGiveawayServiceUndistributedGroup",
+    )
+
+    fun localeController(lpparam: LoadPackageParam) = classByStrings(
+        lpparam, "org.telegram.messenger.LocaleController",
+        "getLocaleFileStrings: error, reloadLastFile = true;",
+    )
+
+    fun sharedConfig(lpparam: LoadPackageParam) = classByStrings(
+        lpparam, "org.telegram.messenger.SharedConfig",
+        "overrideDevicePerformanceClass",
+    )
+
+    fun topicsController(lpparam: LoadPackageParam) = classByStrings(
+        lpparam, "org.telegram.messenger.TopicsController",
+        "[TopicsController]: cache desynchronization",
+    )
+
+    /**
+     * One method, by its kept [name] (older builds) and otherwise by a DexKit query that
+     * must match exactly one method.
+     */
+    fun method(
+        lpparam: LoadPackageParam,
+        cls: Class<*>,
+        name: String,
+        paramCount: Int? = null,
+        optional: Boolean = false,
+        query: (DexKitBridge) -> List<MethodData>,
+    ): Method? {
+        val named = cls.declaredMethods.filter {
+            it.name == name && (paramCount == null || it.parameterTypes.size == paramCount)
+        }
+        if (named.size == 1) return named.single().apply { isAccessible = true }
+        return cachedMethod(lpparam, "${cls.name}.$name", "${cls.simpleName}.$name", optional, query)
+    }
+
     /**
      * Resolves one method by a DexKit query, caches it and logs the outcome. The query
      * must match exactly one method; anything else counts as unresolved.
@@ -101,15 +341,17 @@ object TgDeobf {
         lpparam: LoadPackageParam,
         key: String,
         label: String,
+        optional: Boolean = false,
         query: (DexKitBridge) -> List<MethodData>,
     ): Method? {
+        val failure = if (optional) "DEBUG" else "ERROR"
         if (cache.containsKey(key)) return cache[key] as Method?
 
         val resolved = runCatching {
             withBridge(lpparam) { bridge ->
                 val matches = query(bridge)
                 if (matches.size != 1) {
-                    log("$label: expected 1 match, found ${matches.size}", "ERROR")
+                    log("$label: expected 1 match, found ${matches.size}", failure)
                     return@withBridge null
                 }
                 matches.single().getMethodInstance(lpparam.classLoader)
@@ -122,32 +364,85 @@ object TgDeobf {
         if (resolved != null) {
             log("Resolved $label: ${resolved.declaringClass.name}.${resolved.name}", "DEBUG")
         } else {
-            log("Failed to resolve $label", "ERROR")
+            log("Failed to resolve $label", failure)
         }
         return resolved
     }
 
     /**
      * ChatMessageCell's measureTime(MessageObject): builds the time string beside the
-     * bubble, including the "edited" label. It is the only cell method taking a
-     * MessageObject that reads R.string.EditedMessage.
+     * bubble, including the "edited" label. Up to Telegram 13.1 it reads
+     * R.string.EditedMessage itself; since 13.2 a static helper of the cell builds the
+     * string and measureTime is the cell's (MessageObject) method that calls it.
+     * [getString] are the LocaleController (int[, …]) -> String methods the label is
+     * read with.
      */
-    fun measureTime(lpparam: LoadPackageParam): Method? =
-        cachedMethod(lpparam, KEY_MEASURE_TIME, "ChatMessageCell.measureTime") { bridge ->
-            bridge.findMethod {
-                matcher {
-                    returnType("void")
-                    paramTypes("org.telegram.messenger.MessageObject")
-                    addUsingField("Lorg/telegram/messenger/R\$string;->EditedMessage:I", UsingType.Read)
-                }
-            }.filter { method ->
-                runCatching {
+    data class EditedTime(
+        val measureTime: Method,
+        val getString: List<Method>,
+        val editedMessage: Int,
+    )
+
+    fun editedTime(lpparam: LoadPackageParam): EditedTime? {
+        if (cache.containsKey(KEY_MEASURE_TIME)) return cache[KEY_MEASURE_TIME] as EditedTime?
+        val messageObject = messageObject(lpparam)
+        val localeController = localeController(lpparam)
+
+        val resolved = if (messageObject == null || localeController == null) null else runCatching {
+            withBridge(lpparam) { bridge ->
+                fun isView(className: String) = runCatching {
                     android.view.View::class.java.isAssignableFrom(
-                        XposedHelpers.findClass(method.className, lpparam.classLoader)
+                        XposedHelpers.findClass(className, lpparam.classLoader)
                     )
                 }.getOrDefault(false)
+
+                val readers = bridge.findMethod {
+                    matcher { readsRes(lpparam, "string", "EditedMessage") }
+                }.filter { messageObject.name in it.paramTypeNames }
+                if (readers.isEmpty()) return@withBridge null
+
+                val measureTime = readers.singleOrNull {
+                    it.returnTypeName == "void" && it.paramTypeNames == listOf(messageObject.name) &&
+                        isView(it.className)
+                } ?: readers.flatMap { reader ->
+                    reader.callers.filter {
+                        it.returnTypeName == "void" && it.paramTypeNames == listOf(messageObject.name) &&
+                            it.className == reader.className && isView(it.className)
+                    }
+                }.distinctBy { it.descriptor }.singleOrNull() ?: return@withBridge null
+
+                val getString = readers.flatMap { it.invokes }
+                    .filter {
+                        it.className == localeController.name &&
+                            it.returnTypeName == "java.lang.String" &&
+                            it.paramTypeNames.firstOrNull() == "int"
+                    }
+                    .distinctBy { it.descriptor }
+                    .map { it.getMethodInstance(lpparam.classLoader).apply { isAccessible = true } }
+                if (getString.isEmpty()) return@withBridge null
+
+                EditedTime(
+                    measureTime.getMethodInstance(lpparam.classLoader).apply { isAccessible = true },
+                    getString,
+                    resId(lpparam, "string", "EditedMessage"),
+                )
             }
+        }.onFailure {
+            log("ChatMessageCell.measureTime resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+
+        cache[KEY_MEASURE_TIME] = resolved
+        if (resolved != null) {
+            log(
+                "Resolved ChatMessageCell.measureTime: ${resolved.measureTime.declaringClass.name}." +
+                    "${resolved.measureTime.name} getString=${resolved.getString.joinToString { it.name }}",
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve ChatMessageCell.measureTime", "ERROR")
         }
+        return resolved
+    }
 
     /**
      * createView(Context) of the main tabs screen (Chats / Contacts / Settings / Calls /
@@ -159,7 +454,7 @@ object TgDeobf {
                 matcher {
                     paramTypes("android.content.Context")
                     returnType("android.view.View")
-                    addUsingField("Lorg/telegram/messenger/R\$string;->MainTabsContacts:I", UsingType.Read)
+                    readsRes(lpparam, "string", "MainTabsContacts")
                 }
             }
         }
@@ -312,8 +607,8 @@ object TgDeobf {
     /**
      * ChatActivity.maybePlayVisibleVideo(): on a volume key press LaunchActivity's
      * dispatchKeyEvent asks the open chat to start the visible video with sound. It is the
-     * no-arg boolean method dispatchKeyEvent calls that also calls
-     * SharedConfig.setNoSoundHintShowed.
+     * only instance no-arg boolean method dispatchKeyEvent calls on a screen (the others
+     * are PhotoViewer's and static helpers).
      */
     fun volumeKeyVideoPlayback(lpparam: LoadPackageParam): Method? =
         cachedMethod(lpparam, KEY_VOLUME_VIDEO, "ChatActivity.maybePlayVisibleVideo") { bridge ->
@@ -321,12 +616,6 @@ object TgDeobf {
                 matcher {
                     returnType("boolean")
                     paramCount(0)
-                    invokeMethods {
-                        add {
-                            declaredClass("org.telegram.messenger.SharedConfig")
-                            name("setNoSoundHintShowed")
-                        }
-                    }
                     callerMethods {
                         add {
                             declaredClass("org.telegram.ui.LaunchActivity")
@@ -334,6 +623,9 @@ object TgDeobf {
                         }
                     }
                 }
+            }.filter {
+                !java.lang.reflect.Modifier.isStatic(it.modifiers) &&
+                    !it.className.startsWith("org.telegram.ui.PhotoViewer")
             }
         }
 
@@ -394,13 +686,7 @@ object TgDeobf {
                 matcher {
                     returnType("void")
                     paramCount(0)
-                    addUsingField("Lorg/telegram/messenger/R\$drawable;->msg_mini_forumarrow:I", UsingType.Read)
-                    invokeMethods {
-                        add {
-                            declaredClass("org.telegram.messenger.TopicsController")
-                            name("getTopicIconName")
-                        }
-                    }
+                    readsRes(lpparam, "drawable", "msg_mini_forumarrow")
                 }
             }.filter { method ->
                 runCatching {
@@ -412,9 +698,9 @@ object TgDeobf {
         }
 
     /** DialogCell's MessageObject field: the message a chat list row shows. */
-    fun dialogCellMessage(buildLayout: Method): Field? =
+    fun dialogCellMessage(lpparam: LoadPackageParam, buildLayout: Method): Field? =
         buildLayout.declaringClass.declaredFields.singleOrNull {
-            it.type.name == "org.telegram.messenger.MessageObject" &&
+            it.type == messageObject(lpparam) &&
                 !java.lang.reflect.Modifier.isStatic(it.modifiers)
         }?.apply { isAccessible = true }
 
@@ -440,7 +726,7 @@ object TgDeobf {
                         declaredClass(chatClass.name)
                         returnType("void")
                         paramTypes("boolean")
-                        addUsingField("Lorg/telegram/messenger/R\$string;->AccountFrozenBottomTitle:I", UsingType.Read)
+                        readsRes(lpparam, "string", "AccountFrozenBottomTitle")
                     }
                 }.singleOrNull() ?: return@withBridge null
                 val currentChat = update.usingFields
@@ -452,17 +738,12 @@ object TgDeobf {
                     .eachCount()
                     .maxByOrNull { it.value }
                     ?.key ?: return@withBridge null
+                // The chat screen's only (boolean) -> float method.
                 val islandHeight = bridge.findMethod {
                     matcher {
                         declaredClass(chatClass.name)
                         returnType("float")
                         paramTypes("boolean")
-                        invokeMethods {
-                            add {
-                                declaredClass("org.telegram.messenger.AndroidUtilities")
-                                name("lerp")
-                            }
-                        }
                     }
                 }.singleOrNull()
                 ChatBottomBar(
@@ -612,16 +893,21 @@ object TgDeobf {
                 matcher {
                     paramTypes("android.content.Context")
                     returnType("android.view.View")
-                    addUsingField("Lorg/telegram/messenger/R\$drawable;->outline_fab_story_24:I", UsingType.Read)
+                    readsRes(lpparam, "drawable", "outline_fab_story_24")
                 }
             }
         }
 
+    /** StoriesController, found by its log strings. */
+    fun storiesController(lpparam: LoadPackageParam) = classByStrings(
+        lpparam, "org.telegram.ui.Stories.StoriesController",
+        "StoriesController can't apply story user == null",
+    )
+
     /**
      * StoriesController.hasStories(long dialogId), which drives the story rings around
-     * avatars. StoriesController is the return type of the kept
-     * MessagesController.getStoriesController(); hasStories is the (long) -> boolean
-     * method that the kept ChatObject.hasStories(Chat) delegates to.
+     * avatars: the (long) -> boolean method that checks the peer's story list for
+     * emptiness (the others look for live streams, unread or uploading stories).
      */
     fun hasStories(lpparam: LoadPackageParam, storiesController: Class<*>): Method? =
         cachedMethod(lpparam, KEY_HAS_STORIES, "StoriesController.hasStories") { bridge ->
@@ -630,10 +916,14 @@ object TgDeobf {
                     declaredClass(storiesController.name)
                     returnType("boolean")
                     paramTypes("long")
-                    callerMethods {
+                    addUsingField(
+                        "Lorg/telegram/tgnet/tl/TL_stories\$PeerStories;->stories:Ljava/util/ArrayList;",
+                        UsingType.Read
+                    )
+                    invokeMethods {
                         add {
-                            declaredClass("org.telegram.messenger.ChatObject")
-                            name("hasStories")
+                            declaredClass("java.util.ArrayList")
+                            name("isEmpty")
                         }
                     }
                 }
@@ -716,72 +1006,56 @@ object TgDeobf {
     }
 
     /**
-     * ItemOptions, Telegram's generic popup menu. The class itself is found without
-     * DexKit: it is the parameter type of the kept `ApplicationLoader.addItemOptions`,
-     * an empty extension point Telegram calls while building the chat list "⋮" menu.
-     * [addItem] is `void add(int iconRes, CharSequence text, Runnable onClick, boolean red)`.
+     * The chat list "⋮" menu. [builder] is the DialogsActivity method that fills it, the
+     * only one reading the theme switch, New Group and Saved Messages icons. [addItem] is
+     * ItemOptions' `void add(int iconRes, CharSequence text, Runnable onClick, boolean red)`,
+     * the method the builder calls for those items. [savedIcon] is the Saved Messages icon,
+     * the item the module entry goes after.
      */
     data class ItemOptions(
-        val clazz: Class<*>,
+        val builder: Method,
         val addItem: Method,
+        val savedIcon: Int,
     )
 
     fun itemOptions(lpparam: LoadPackageParam): ItemOptions? {
         if (cache.containsKey(KEY_ITEM_OPTIONS)) return cache[KEY_ITEM_OPTIONS] as ItemOptions?
 
         val resolved = runCatching {
-            val appLoader = XposedHelpers.findClass(APPLICATION_LOADER, lpparam.classLoader)
-            val hookPoint = appLoader.declaredMethods.single {
-                it.name == "addItemOptions" && it.parameterTypes.size == 1
+            withBridge(lpparam) { bridge ->
+                val builder = bridge.findMethod {
+                    matcher {
+                        readsRes(lpparam, "drawable", "menu_day_mode_24")
+                        readsRes(lpparam, "drawable", "outline_groups_24")
+                        readsRes(lpparam, "drawable", "outline_saved_24")
+                    }
+                }.singleOrNull() ?: return@withBridge null
+                val add = builder.invokes.filter {
+                    it.returnTypeName == "void" && it.paramTypeNames == listOf(
+                        "int", "java.lang.CharSequence", "java.lang.Runnable", "boolean"
+                    )
+                }.groupingBy { it.descriptor }.eachCount().maxByOrNull { it.value }?.key
+                    ?: return@withBridge null
+                ItemOptions(
+                    builder.getMethodInstance(lpparam.classLoader).apply { isAccessible = true },
+                    bridge.getMethodData(add)!!.getMethodInstance(lpparam.classLoader)
+                        .apply { isAccessible = true },
+                    resId(lpparam, "drawable", "outline_saved_24"),
+                )
             }
-            val clazz = hookPoint.parameterTypes[0]
-            val addSignature = arrayOf(
-                Int::class.javaPrimitiveType,
-                CharSequence::class.java,
-                Runnable::class.java,
-                Boolean::class.javaPrimitiveType,
-            )
-            val candidates = clazz.declaredMethods.filter {
-                it.returnType == Void.TYPE && it.parameterTypes.contentEquals(addSignature)
-            }
-
-            // Two methods share this signature: the unconditional add and an
-            // "add only if <flag>" variant. The chat list menu builder (the method that
-            // calls addItemOptions) only uses the unconditional one, so pick that.
-            val addName = when (candidates.size) {
-                0 -> null
-                1 -> candidates[0].name
-                else -> withBridge(lpparam) { bridge ->
-                    bridge.findMethod {
-                        matcher {
-                            declaredClass(clazz.name)
-                            returnType("void")
-                            paramTypes("int", "java.lang.CharSequence", "java.lang.Runnable", "boolean")
-                            callerMethods {
-                                add {
-                                    invokeMethods {
-                                        add {
-                                            declaredClass(APPLICATION_LOADER)
-                                            name("addItemOptions")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }.singleOrNull()?.name
-                }
-            } ?: return@runCatching null
-
-            ItemOptions(clazz, candidates.first { it.name == addName }.apply { isAccessible = true })
         }.onFailure {
             log("ItemOptions resolution failed: ${it.message}", "ERROR")
         }.getOrNull()
 
         cache[KEY_ITEM_OPTIONS] = resolved
         if (resolved != null) {
-            log("Resolved ItemOptions: ${resolved.clazz.name} add=${resolved.addItem.name}", "DEBUG")
+            log(
+                "Resolved chat list menu: ${resolved.builder.declaringClass.name}.${resolved.builder.name} " +
+                    "add=${resolved.addItem.declaringClass.name}.${resolved.addItem.name}",
+                "DEBUG"
+            )
         } else {
-            log("Failed to resolve ItemOptions", "ERROR")
+            log("Failed to resolve the chat list menu", "ERROR")
         }
         return resolved
     }
@@ -818,9 +1092,7 @@ object TgDeobf {
                 bridge.findMethod {
                     matcher {
                         paramCount(1)
-                        icons.forEach { icon ->
-                            addUsingField("Lorg/telegram/messenger/R\$drawable;->$icon:I", UsingType.Read)
-                        }
+                        icons.forEach { icon -> readsRes(lpparam, "drawable", icon) }
                     }
                 }.singleOrNull()?.let { it.className to it.name }
             } ?: return@runCatching null
@@ -907,5 +1179,4 @@ object TgDeobf {
     private const val KEY_ROUND_FRAME_TIMESTAMP = "roundFrameTimestamp"
     private const val KEY_ROUND_SURFACE_INDEX = "roundSurfaceIndex"
     private const val ANCHOR_SHOW_ROUND = "InstantCamera show round camera "
-    private const val APPLICATION_LOADER = "org.telegram.messenger.ApplicationLoader"
 }

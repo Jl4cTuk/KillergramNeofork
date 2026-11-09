@@ -4,9 +4,9 @@ import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.graphics.drawable.Drawable
 import android.view.View
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 import java.util.Collections
 import java.util.WeakHashMap
 

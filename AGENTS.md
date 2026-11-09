@@ -14,13 +14,14 @@ Killergram Neofork is an **Xposed module** that enhances Telegram (and its forks
 The module runs in **two separate processes**:
 
 1. **Settings app** (`MainActivity`) — standalone Compose UI where users toggle features. Writes to world-readable `SharedPreferences`.
-2. **Xposed hooks** (`MainHook`) — injected into the target Telegram process by LSPosed. Reads preferences via `XSharedPreferences` and applies hooks conditionally.
+2. **Xposed hooks** (`MainHook`) — injected into the target Telegram process by the framework (libxposed API 102). Reads the framework's remote preferences and applies hooks conditionally.
 
-Preferences bridge the two processes: the UI writes them, the hooks read them at injection time.
+Preferences bridge the two processes: the UI keeps them in its own `SharedPreferences` and mirrors every change into the framework's remote preferences (`data/ModuleService`, bound through `XposedServiceHelper` in `KgApp`); the hooks read the remote ones at injection time.
 
 ### Package Layout (`app/src/main/java/aether/killergram/neo/`)
 
-- **`MainHook.kt`** — Entry point for Xposed. Implements `IXposedHookLoadPackage` and `IXposedHookZygoteInit`. Reads prefs and conditionally invokes each hook.
+- **`MainHook.kt`** — Entry point: an `XposedModule` (libxposed API 102) listed in `src/main/resources/META-INF/xposed/java_init.list`, with `module.prop` and `scope.list` beside it. Installs hooks in `onPackageReady`, reads prefs and conditionally invokes each hook.
+- **`xposed/`** — A thin layer with the legacy `XposedBridge` / `XC_MethodHook` / `XC_MethodReplacement` / `XposedHelpers` shapes on top of the API 102 interceptor chain, so hooks keep the before/after style. `XC_MethodHook` and `XposedHelpers` are Java on purpose: Kotlin callers get platform types, as with the originals.
 - **`hooks/`** — Each feature is a separate file defining an **extension function on `Hooks`** (e.g., `fun Hooks.killStories()`). The `Hooks` class wraps `LoadPackageParam` and provides `loadClass()` for safe class resolution.
 - **`hooks/Hooks.kt`** — Thin wrapper around `LoadPackageParam` with logged class loading.
 - **`ui/`** — Jetpack Compose UI: screens, components, theme, navigation. Uses Material3 with bottom nav (Features / Settings tabs).
@@ -35,12 +36,12 @@ Preferences bridge the two processes: the UI writes them, the hooks read them at
 3. Register the hook in `MainHook.kt`'s `hooksMap` (maps pref key → hook invocation).
 4. Add a `ModuleToggle` entry in `ToggleCatalog.kt` under the appropriate section.
 
-### Telegram 12.10.2+ obfuscation
+### Telegram obfuscation
 
-Official Telegram builds are R8-obfuscated since 12.10.2. `org.telegram.ui.*` classes and their members get new names in every release (`ChatActivity` → `no`, `InstantCameraView` → `o60` → `h70`), so `loadClass("org.telegram.ui.…")` fails. `org.telegram.messenger.*`, `org.telegram.tgnet.*` and `org.telegram.messenger.R` keep their names.
+Official Telegram builds are R8-obfuscated since 12.10.2 (`org.telegram.ui.*`), and since 13.2 `org.telegram.messenger.*` is obfuscated too, classes and members (`MessagesController` → `vp`). What still keeps its name: `BaseController`'s getters (`getMessagesController()`, `getUserConfig()`, …) and its `currentAccount` field, `ApplicationLoaderImpl` (the manifest Application, whose superclass is `ApplicationLoader`), `MediaController`, `org.telegram.messenger.camera.*`, `org.telegram.messenger.time.*`, and `org.telegram.tgnet.*` TL classes with their fields. Resource ids are inlined constants since 13.2 (no `R` field reads), and strings are not packaged resources: their ids map to `key.hashCode()` in `assets/string_resource_ids.bin`.
 
-- Prefer anchoring hooks in the kept packages (e.g. `MessagesController`, `TopicsController`, `ApplicationLoader.addItemOptions`).
-- When a UI class is unavoidable, resolve it at runtime in `core/TgDeobf.kt` with DexKit (string literals, signatures, callers, reads of `R$drawable` fields) and cache the result. Never hard-code obfuscated names.
+- Resolve classes and members at runtime in `core/TgDeobf.kt` with DexKit (string literals, signatures, callers, TL field reads, resource ids via `readsRes`) and cache the result. Look the real name up first so older builds keep working (`TgDeobf.method`, `Hooks.method`, `Hooks.loadClass`). Never hard-code obfuscated names.
+- `Hooks.hook(method, label, callback)` logs when a member is missing; `hookAllMethods(cls, "name")` on an obfuscated class silently hooks nothing.
 - `libdexkit.so` is loaded explicitly from the module APK's `lib/<abi>/` (`MainHook.modulePath`), because `System.loadLibrary` cannot see module libraries inside the Telegram process.
 - After a Telegram update, check the `Resolved …` lines in the Vector log (debug logging on) to confirm every fingerprint still resolves.
 
@@ -50,10 +51,11 @@ Official Telegram builds are R8-obfuscated since 12.10.2. `org.telegram.ui.*` cl
 
 ## Key Technical Details
 
-- Xposed API 82 is a **compileOnly** dependency — it's provided by the framework at runtime.
+- libxposed API 102 is a **compileOnly** dependency — it's provided by the framework at runtime; `io.github.libxposed:service` (bundled) connects the module app to the framework. compileSdk must be 37 for it.
 - ProGuard keeps all classes under `aether.killergram.neo.**` (no obfuscation for the module).
 - The module maintains a `packageBlocklist` to avoid hooking into itself or GMS.
-- `Utils.kt` provides a `log()` helper that wraps `XposedBridge.log()` with level-based filtering (DEBUG output controlled by the debug logging preference).
+- `Utils.kt` provides a `log()` helper that writes to the framework log (also in logcat, tag `KG Neo`) with level-based filtering (DEBUG output controlled by the debug logging preference).
+- Settings saved by pre-API-102 versions live in Vector's legacy XSharedPreferences file under `/data/misc/<random>/prefs/<package>/`; `ModuleService` copies them once as root.
 - Version is in `app/build.gradle.kts` (`versionName` / `versionCode`).
 - This fork's `applicationId` is `aether.killergram.neo.fork` (so it can coexist with upstream KG Neo); the code `namespace` stays `aether.killergram.neo`. Never hard-code the package name — use `BuildConfig.APPLICATION_ID`.
 

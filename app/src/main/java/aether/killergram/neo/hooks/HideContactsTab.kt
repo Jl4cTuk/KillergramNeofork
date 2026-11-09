@@ -4,8 +4,8 @@ import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.view.View
 import android.view.ViewGroup
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
 import java.lang.reflect.Method
 
 // Name of the Contacts tab's enum constant (enum names survive R8).

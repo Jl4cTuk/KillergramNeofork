@@ -1,9 +1,9 @@
 package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 /**
  * Telegram 12.10+ stores the per-photo HD choice as a nullable Boolean on

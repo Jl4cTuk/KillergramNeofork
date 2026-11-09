@@ -8,9 +8,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
 
 private const val MODULE_PACKAGE = BuildConfig.APPLICATION_ID
 private const val MODULE_SETTINGS_ACTIVITY = "aether.killergram.neo.MainActivity"
@@ -18,29 +17,40 @@ private const val MODULE_SETTINGS_ACTIVITY = "aether.killergram.neo.MainActivity
 /**
  * Adds a "Killergram" entry to the chat list "⋮" menu that opens the module settings.
  *
- * Telegram builds that menu with ItemOptions and, midway, calls the empty extension
- * point ApplicationLoader.addItemOptions(itemOptions). ApplicationLoader is in the kept
- * org.telegram.messenger package, so hooking it survives R8 renames; only the
- * ItemOptions "add item" method is resolved per build (see TgDeobf.itemOptions).
+ * Telegram builds that menu with ItemOptions in one DialogsActivity method; while it
+ * runs, the entry is added right after the Saved Messages item (see
+ * TgDeobf.itemOptions). Up to Telegram 13.1 an empty ApplicationLoader.addItemOptions
+ * extension point sat there, R8 removed it in 13.2.
  */
 fun Hooks.addSettingsEntry() {
-    val appLoaderClass = loadClass("org.telegram.messenger.ApplicationLoader") ?: return
-    val itemOptions = TgDeobf.itemOptions(lpparam) ?: run {
-        log("ItemOptions unresolved — settings entry not added", "ERROR")
+    val menu = TgDeobf.itemOptions(lpparam) ?: run {
+        log("Chat list menu unresolved — settings entry not added", "ERROR")
         return
     }
+    val buildingMenu = ThreadLocal.withInitial { false }
 
-    XposedBridge.hookAllMethods(appLoaderClass, "addItemOptions", object : XC_MethodHook() {
+    XposedBridge.hookMethod(menu.builder, object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            buildingMenu.set(true)
+        }
+
         override fun afterHookedMethod(param: MethodHookParam) {
-            val options = param.args.getOrNull(0) ?: return
-            val context = runCatching {
-                XposedHelpers.getStaticObjectField(appLoaderClass, "applicationContext") as? Context
-            }.getOrNull() ?: return
+            buildingMenu.set(false)
+        }
+    })
+
+    XposedBridge.hookMethod(menu.addItem, object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
+            if (buildingMenu.get() != true || param.args[0] != menu.savedIcon) return
+            val options = param.thisObject ?: return
+            val context = TgDeobf.applicationContext(lpparam) ?: return
 
             val icon = context.resources
                 .getIdentifier("msg_customize", "drawable", context.packageName)
+            // The entry is added with the same method; don't come back here for it.
+            buildingMenu.set(false)
             runCatching {
-                itemOptions.addItem.invoke(
+                menu.addItem.invoke(
                     options,
                     icon,
                     "Killergram",
@@ -50,6 +60,7 @@ fun Hooks.addSettingsEntry() {
             }.onFailure {
                 log("Failed to add Killergram menu entry: ${it.message}", "ERROR")
             }
+            buildingMenu.set(true)
         }
     })
 }

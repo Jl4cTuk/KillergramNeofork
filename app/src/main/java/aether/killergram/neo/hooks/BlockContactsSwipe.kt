@@ -2,9 +2,9 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 // Main tab positions (Telegram 12.2+): Chats, Contacts, Settings or Calls, Profile.
 private const val POSITION_CHATS = 0

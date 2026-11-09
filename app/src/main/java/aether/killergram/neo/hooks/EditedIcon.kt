@@ -11,9 +11,9 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ReplacementSpan
 import android.view.View
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 import java.lang.reflect.Field
 import kotlin.math.ceil
 import kotlin.math.min
@@ -32,22 +32,15 @@ private var editedIcon: Drawable? = null
 fun Hooks.replaceEditedLabelWithIcon() {
     log("Replacing edited labels with icon...")
 
-    val localeControllerClass = loadClass("org.telegram.messenger.LocaleController") ?: return
-    val editedMessageId = runCatching {
-        XposedHelpers.getStaticIntField(
-            XposedHelpers.findClass("org.telegram.messenger.R\$string", lpparam.classLoader),
-            "EditedMessage"
-        )
-    }.getOrNull() ?: run {
+    // ChatMessageCell is obfuscated; measureTime and the LocaleController getters the
+    // "edited" label is read with are found by fingerprint (see TgDeobf.editedTime).
+    val edited = TgDeobf.editedTime(lpparam) ?: return
+    if (edited.editedMessage == 0) {
         log("R.string.EditedMessage not found — edited icon skipped", "ERROR")
         return
     }
 
-    // ChatMessageCell is obfuscated in Telegram 12.10.2+; measureTime is found by
-    // fingerprint (it is the cell method that reads R.string.EditedMessage).
-    val measureTime = TgDeobf.measureTime(lpparam) ?: return
-
-    XposedBridge.hookMethod(measureTime, object : XC_MethodHook() {
+    XposedBridge.hookMethod(edited.measureTime, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             measuringTime.set(true)
         }
@@ -62,20 +55,17 @@ fun Hooks.replaceEditedLabelWithIcon() {
         }
     })
 
-    // measureTime concatenates getString(R.string.EditedMessage) with the time as plain
-    // strings, so swap the label for the placeholder at the source.
-    XposedHelpers.findAndHookMethod(
-        localeControllerClass,
-        "getString",
-        Int::class.javaPrimitiveType,
-        object : XC_MethodHook() {
+    // measureTime concatenates the "edited" label with the time as plain strings, so
+    // swap the label for the placeholder at the source.
+    edited.getString.forEach { getString ->
+        XposedBridge.hookMethod(getString, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                if (measuringTime.get() == true && param.args[0] == editedMessageId) {
+                if (measuringTime.get() == true && param.args[0] == edited.editedMessage) {
                     param.result = EDIT_ICON_PLACEHOLDER
                 }
             }
-        }
-    )
+        })
+    }
 }
 
 private fun applyEditedIcon(cell: View) {

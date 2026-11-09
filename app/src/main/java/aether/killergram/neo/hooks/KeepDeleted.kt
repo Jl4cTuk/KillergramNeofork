@@ -1,8 +1,8 @@
 package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodReplacement
-import de.robv.android.xposed.XposedBridge
+import aether.killergram.neo.xposed.XC_MethodReplacement
+import aether.killergram.neo.xposed.XposedBridge
 
 fun Hooks.keepDeletedMessages() {
     log("Forcing TG to keep deleted messages...")

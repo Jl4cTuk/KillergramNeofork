@@ -4,9 +4,9 @@ import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
 import android.content.Context
 import android.view.View
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 import java.lang.reflect.Modifier
 import kotlin.math.abs
 

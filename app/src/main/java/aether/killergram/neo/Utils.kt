@@ -1,55 +1,38 @@
 package aether.killergram.neo
 
 import aether.killergram.neo.core.PreferenceKeys
-import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
-import de.robv.android.xposed.XSharedPreferences
-import de.robv.android.xposed.XposedBridge
+import android.content.SharedPreferences
+import aether.killergram.neo.xposed.XposedBridge
 
+/**
+ * The module settings inside the hooked app: the remote preferences the module app keeps
+ * in sync (see ModulePrefsStore). They are live, no reload needed.
+ */
 class PreferencesUtils {
-    private lateinit var preferencesInstance: XSharedPreferences
+    fun getPrefsInstance(prefsName: String = PreferenceKeys.PREFS_NAME): SharedPreferences =
+        cached.getOrPut(prefsName) { XposedBridge.framework.getRemotePreferences(prefsName) }
 
-    fun getPrefsInstance(prefsName: String = PreferenceKeys.PREFS_NAME): XSharedPreferences {
-        return if (!this::preferencesInstance.isInitialized) {
-            val instance = XSharedPreferences(BuildConfig.APPLICATION_ID, prefsName)
-            instance.makeWorldReadable()
-            this.preferencesInstance = instance
-            instance
-        } else {
-            val instance = this.preferencesInstance
-            instance.reload()
-            instance
-        }
+    private companion object {
+        val cached = java.util.concurrent.ConcurrentHashMap<String, SharedPreferences>()
     }
 }
 
 fun log(message: String, level: String = "") {
+    // The module app's own process has no framework, only the hooks log.
+    if (!XposedBridge.isReady) return
     val debugLogging = PreferencesUtils().getPrefsInstance()
         .getBoolean(PreferenceKeys.DEBUG_LOGGING, false)
-    val tag = "[KG Neo]"
-    if (level == "") {
-        XposedBridge.log("$tag $message")
-        Log.i(tag, message)
-    } else if (level == "DEBUG" && debugLogging) {
-        XposedBridge.log("$tag-[DEBUG] $message")
-        Log.d(tag, message)
-    } else if (level == "ERROR") {
-        XposedBridge.log("$tag-[ERROR] $message")
-        Log.e(tag, message)
-    } else if (level != "DEBUG") {
-        XposedBridge.log("$tag-[$level] $message")
-        Log.i(tag, "[$level] $message")
+    // The framework log also goes to logcat (tag "KG Neo").
+    when (level) {
+        "" -> XposedBridge.log(message, Log.INFO)
+        "DEBUG" -> if (debugLogging) XposedBridge.log("[DEBUG] $message", Log.DEBUG)
+        "ERROR" -> XposedBridge.log("[ERROR] $message", Log.ERROR)
+        else -> XposedBridge.log("[$level] $message", Log.INFO)
     }
 }
 
-@Suppress("DEPRECATION")
-@SuppressLint("WorldReadableFiles")
-fun isLsposedAvailable(context: Context): Boolean {
-    try {
-        context.getSharedPreferences(PreferenceKeys.PREFS_NAME, Context.MODE_WORLD_READABLE)
-        return true
-    } catch (e: SecurityException) {
-        return false
-    }
-}
+/** Whether the Xposed framework runs the module (its service is bound). */
+@Suppress("UNUSED_PARAMETER")
+fun isLsposedAvailable(context: Context): Boolean = aether.killergram.neo.data.ModuleService.isActive

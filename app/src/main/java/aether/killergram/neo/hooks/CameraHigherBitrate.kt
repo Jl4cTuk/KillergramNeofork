@@ -2,9 +2,9 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
 import android.media.MediaRecorder
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 fun Hooks.cameraHigherBitrate(roundBitrate: Int) {
     log("Applying higher video bitrate (round: ${roundBitrate}kbps)...")

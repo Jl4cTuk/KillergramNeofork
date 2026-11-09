@@ -2,9 +2,9 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
 import android.os.PowerManager
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 fun Hooks.disableNotificationDelay() {
     log("Disabling stock notification delay...")

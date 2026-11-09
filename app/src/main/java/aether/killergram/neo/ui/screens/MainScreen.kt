@@ -3,7 +3,6 @@ package aether.killergram.neo.ui.screens
 import aether.killergram.neo.core.PreferenceKeys
 import aether.killergram.neo.data.LauncherIcon
 import aether.killergram.neo.data.ModulePrefsStore
-import aether.killergram.neo.isLsposedAvailable
 import aether.killergram.neo.ui.model.ToggleCatalog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,19 +46,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
-    var isModuleActive by remember(context) { mutableStateOf(isLsposedAvailable(context)) }
+    // The framework's service binds asynchronously after the app starts.
+    val boundService by aether.killergram.neo.data.ModuleService.service.collectAsState()
+    val isModuleActive = boundService != null
     var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
-
-    LifecycleResumeEffect(context) {
-        isModuleActive = isLsposedAvailable(context)
-        onPauseOrDispose { }
-    }
 
     if (showSettingsSheet) {
         SettingsSheet(

@@ -1,9 +1,9 @@
 package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 import java.util.Locale
 
 fun Hooks.showTimestampSeconds() {
@@ -12,37 +12,55 @@ fun Hooks.showTimestampSeconds() {
     val localeControllerClass = loadClass("org.telegram.messenger.LocaleController") ?: return
     val fastDateFormatClass = loadClass("org.telegram.messenger.time.FastDateFormat") ?: return
 
-    val formatterHook = object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
-            val localeController = param.thisObject ?: return
-            val formatter = buildSecondsFormatter(localeControllerClass, fastDateFormatClass, localeController) ?: return
-            val fieldName = if (param.method.name == "getFormatterConstDay") "formatterConstDay" else "formatterDay"
-
-            runCatching {
-                XposedHelpers.setObjectField(localeController, fieldName, formatter)
-            }
-            param.result = formatter
-        }
+    // getFormatterDay(): the message time formatter, built from the "formatterDay24H" /
+    // "formatterDay12H" locale keys. getFormatterConstDay() (same pattern, no locale
+    // keys) is gone since Telegram 13.2, so it is only hooked by name.
+    val getFormatterDay = method(localeControllerClass, "getFormatterDay", 0) {
+        returnType(fastDateFormatClass.name)
+        paramCount(0)
+        usingStrings("formatterDay24H", "formatterDay12H")
+    }
+    val getFormatterConstDay = localeControllerClass.declaredMethods.singleOrNull {
+        it.name == "getFormatterConstDay" && it.parameterTypes.isEmpty()
     }
 
-    XposedBridge.hookAllMethods(localeControllerClass, "getFormatterDay", formatterHook)
-    XposedBridge.hookAllMethods(localeControllerClass, "getFormatterConstDay", formatterHook)
+    listOfNotNull(getFormatterDay, getFormatterConstDay).forEach { getter ->
+        // The getter caches its formatter in an obfuscated field, so the result is
+        // replaced on every call instead.
+        hook(getter, "LocaleController.${getter.name}", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val localeController = param.thisObject ?: return
+                param.result = buildSecondsFormatter(fastDateFormatClass, localeController) ?: return
+            }
+        })
+    }
+    if (getFormatterDay == null) log("LocaleController.getFormatterDay not found", "ERROR")
 }
 
-private fun buildSecondsFormatter(localeControllerClass: Class<*>, fastDateFormatClass: Class<*>, localeController: Any): Any? {
-    val is24HourFormat = runCatching {
-        XposedHelpers.getStaticBooleanField(localeControllerClass, "is24HourFormat")
-    }.getOrDefault(true)
+private var secondsFormatter: Pair<String, Any>? = null
 
+private fun buildSecondsFormatter(fastDateFormatClass: Class<*>, localeController: Any): Any? {
+    val context = runCatching {
+        aether.killergram.neo.xposed.AndroidAppHelper.currentApplication()
+    }.getOrNull()
+    val is24HourFormat = context?.let { android.text.format.DateFormat.is24HourFormat(it) } ?: true
+
+    // LocaleController.currentLocale: the locale the app language is shown in.
     val locale = runCatching {
         XposedHelpers.getObjectField(localeController, "currentLocale") as? Locale
-    }.getOrNull() ?: Locale.getDefault()
+    }.getOrNull() ?: localeController.javaClass.declaredFields.firstNotNullOfOrNull { field ->
+        if (field.type != Locale::class.java || java.lang.reflect.Modifier.isStatic(field.modifiers)) return@firstNotNullOfOrNull null
+        field.isAccessible = true
+        field.get(localeController) as? Locale
+    } ?: Locale.getDefault()
 
     val lang = locale.language.lowercase(Locale.ROOT)
     val formatterLocale = if (lang == "ar" || lang == "ko") locale else Locale.US
     val pattern = if (is24HourFormat) "HH:mm:ss" else "h:mm:ss a"
 
+    val key = "$pattern/$formatterLocale"
+    secondsFormatter?.takeIf { it.first == key }?.let { return it.second }
     return runCatching {
         XposedHelpers.callStaticMethod(fastDateFormatClass, "getInstance", pattern, formatterLocale)
-    }.getOrNull()
+    }.getOrNull()?.also { secondsFormatter = key to it }
 }

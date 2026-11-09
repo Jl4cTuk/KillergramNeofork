@@ -2,8 +2,8 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodReplacement
-import de.robv.android.xposed.XposedBridge
+import aether.killergram.neo.xposed.XC_MethodReplacement
+import aether.killergram.neo.xposed.XposedBridge
 
 /**
  * A volume key press in a chat makes Telegram start the visible video with sound

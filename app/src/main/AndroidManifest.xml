@@ -36,6 +36,7 @@
         tools:node="remove" />
 
     <application
+        android:name=".KgApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -72,17 +73,5 @@
             </intent-filter>
         </activity-alias>
 
-        <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="Make Telegram usable again!" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="93" />
-        <meta-data
-            android:name="xposedscope"
-            android:resource="@array/xposedscope" />
     </application>
 </manifest>

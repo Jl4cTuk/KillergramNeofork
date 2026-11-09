@@ -1,9 +1,9 @@
 package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 fun Hooks.unlimitedRecents(recentStickersLimit: Int, recentEmojiLimit: Int) {
     log("Overriding recent stickers limit to $recentStickersLimit, recent emoji limit to $recentEmojiLimit...")

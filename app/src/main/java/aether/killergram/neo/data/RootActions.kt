@@ -16,6 +16,20 @@ object RootActions {
         runRootCommand("am force-stop $packageName")
     }
 
+    /** The output of [command] run as root, or null if it failed. Blocking. */
+    fun readRootOutput(command: String): String? {
+        val process = runCatching { ProcessBuilder("su", "-c", command).start() }.getOrNull() ?: return null
+        return try {
+            val output = process.inputStream.bufferedReader().readText()
+            val finished = process.waitFor(10, TimeUnit.SECONDS)
+            if (finished && process.exitValue() == 0) output else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            process.destroy()
+        }
+    }
+
     private fun runRootCommand(command: String): Boolean {
         val process = runCatching { ProcessBuilder("su", "-c", command).start() }.getOrNull() ?: return false
 

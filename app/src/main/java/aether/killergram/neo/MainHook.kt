@@ -35,35 +35,45 @@ import aether.killergram.neo.hooks.replaceAppTitle
 import aether.killergram.neo.hooks.unlimitedRecents
 import aether.killergram.neo.hooks.showTimestampSeconds
 import aether.killergram.neo.hooks.videoNoteSizeGuard
-import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.IXposedHookZygoteInit
-import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam
-import de.robv.android.xposed.callbacks.XC_LoadPackage
+import aether.killergram.neo.xposed.LoadPackageParam
+import aether.killergram.neo.xposed.XposedBridge
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
+import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 
 
-class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
-    private val prefs = PreferencesUtils().getPrefsInstance()
+/**
+ * The module entry (libxposed API 102, listed in META-INF/xposed/java_init.list). Hooks
+ * are installed once the target app's class loader is ready, before its Application is
+ * created.
+ */
+class MainHook : XposedModule() {
     private val packageBlocklist = arrayOf(  // Apparently sometimes LSPosed will just hook us into random crap like GMS or ourselves
             BuildConfig.APPLICATION_ID,      // This is supposed to solve this problem
             "com.google.android.gms"
         )
-    override fun initZygote(startupParam: StartupParam?) {
-        modulePath = startupParam?.modulePath
-    }
 
     companion object {
-        /** Path to this module's APK, captured at Zygote init; used to load native libs. */
+        /** Path to this module's APK; used to load native libs. */
         @JvmStatic
         var modulePath: String? = null
             private set
     }
-    override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam?) {
-        if (lpparam?.packageName == null || packageBlocklist.contains(lpparam.packageName)) {
-            log("Aborting load for ${lpparam?.packageName}", "DEBUG")
+
+    override fun onModuleLoaded(param: ModuleLoadedParam) {
+        XposedBridge.framework = this
+        modulePath = moduleApplicationInfo.sourceDir
+    }
+
+    override fun onPackageReady(param: PackageReadyParam) {
+        if (!param.isFirstPackage || packageBlocklist.contains(param.packageName)) {
+            aether.killergram.neo.log("Aborting load for ${param.packageName}", "DEBUG")
             return
         }
+        val lpparam = LoadPackageParam(param.packageName, param.classLoader, param.applicationInfo)
+        val prefs = PreferencesUtils().getPrefsInstance()
 
-        log("Injecting for ${lpparam.packageName}", "DEBUG")
+        aether.killergram.neo.log("Injecting for ${lpparam.packageName}", "DEBUG")
         val hooks = Hooks(lpparam)
 
         val hooksMap = mapOf(

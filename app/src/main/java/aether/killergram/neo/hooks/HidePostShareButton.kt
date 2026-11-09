@@ -1,9 +1,9 @@
 package aether.killergram.neo.hooks
 
 import aether.killergram.neo.log
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 
 fun Hooks.hidePostShareButton() {
     log("Hiding share button for channel posts and reposts in groups...")

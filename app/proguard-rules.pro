@@ -20,3 +20,7 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 -keep class aether.killergram.neo.** {*;}
+
+# libxposed API 102: the entry class is listed in META-INF/xposed/java_init.list.
+-dontwarn io.github.libxposed.annotation.**
+-adaptresourcefilecontents META-INF/xposed/java_init.list

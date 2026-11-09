@@ -8,9 +8,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import aether.killergram.neo.xposed.XC_MethodHook
+import aether.killergram.neo.xposed.XposedBridge
+import aether.killergram.neo.xposed.XposedHelpers
 import java.lang.reflect.Field
 import java.util.Collections
 import java.util.WeakHashMap
@@ -395,7 +395,7 @@ private fun applyRecountedUnreadChats(loader: ClassLoader, storage: Any, account
 
 private fun Hooks.hideTopicsInChatListRows(topicsControllerClass: Class<*>, ensureStore: () -> Boolean) {
     val buildLayout = TgDeobf.dialogCellBuildLayout(lpparam) ?: return
-    val messageField = TgDeobf.dialogCellMessage(buildLayout) ?: run {
+    val messageField = TgDeobf.dialogCellMessage(lpparam, buildLayout) ?: run {
         log("Chat list row message field not found — forum previews keep hidden topics", "ERROR")
         return
     }

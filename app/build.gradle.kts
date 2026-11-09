@@ -18,7 +18,7 @@ val hasReleaseSigning = releaseStoreFile.isPresent &&
 
 android {
     namespace = "aether.killergram.neo"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "aether.killergram.neo.fork"
@@ -67,6 +67,7 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            merges += "META-INF/xposed/*"
         }
         // DexKit ships a native library (libdexkit.so). Keep it uncompressed and
         // extractable so it can be loaded from the Xposed module's process.
@@ -96,5 +97,6 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.dexkit)
-    compileOnly("de.robv.android.xposed:api:82")
+    compileOnly(libs.libxposed.api)
+    implementation(libs.libxposed.service)
 }
