@@ -2,6 +2,7 @@ package aether.killergram.neo.hooks
 
 import aether.killergram.neo.core.TgDeobf
 import aether.killergram.neo.log
+import aether.killergram.neo.xposed.LoadPackageParam
 import android.content.Context
 import android.content.SharedPreferences
 import android.view.View
@@ -104,14 +105,11 @@ private val addingOwnItem = ThreadLocal.withInitial { false }
 fun Hooks.hideTopics() {
     log("Enabling topic hiding...")
 
-    val topicsControllerClass = loadClass("org.telegram.messenger.TopicsController") ?: return
+    val api = TgDeobf.topicsApi(lpparam) ?: return
     val topicClass = loadClass("org.telegram.tgnet.TLRPC\$TL_forumTopic") ?: return
-    val appLoaderClass = loadClass("org.telegram.messenger.ApplicationLoader") ?: return
-    val loader = lpparam.classLoader
+    topics = api
 
-    fun context(): Context? = runCatching {
-        XposedHelpers.getStaticObjectField(appLoaderClass, "applicationContext") as? Context
-    }.getOrNull()
+    fun context(): Context? = TgDeobf.applicationContext(lpparam)
 
     fun topicId(topic: Any): Int? = runCatching { XposedHelpers.getIntField(topic, "id") }.getOrNull()
 
@@ -121,8 +119,8 @@ fun Hooks.hideTopics() {
         return true
     }
 
-    // 1. Filter topic lists and remember which chat each topic belongs to.
-    XposedBridge.hookAllMethods(topicsControllerClass, "getTopics", object : XC_MethodHook() {
+    // 1. Filter topic lists (getTopics) and remember which chat each topic belongs to.
+    XposedBridge.hookMethod(api.getTopics, object : XC_MethodHook() {
         override fun afterHookedMethod(param: MethodHookParam) {
             val chatId = param.args.getOrNull(0) as? Long ?: return
             @Suppress("UNCHECKED_CAST")
@@ -138,10 +136,10 @@ fun Hooks.hideTopics() {
 
     // Unread counters of a forum (chat list badge, mentions, reactions): computed from
     // every topic, so the hidden topics' share is taken back out.
-    XposedBridge.hookAllMethods(topicsControllerClass, "getForumUnreadCount", object : XC_MethodHook() {
+    XposedBridge.hookMethod(api.forumUnread, object : XC_MethodHook() {
         override fun afterHookedMethod(param: MethodHookParam) {
             val chatId = param.args.getOrNull(0) as? Long ?: return
-            val counts = param.result as? IntArray ?: return
+            val counts = (param.result ?: api.forumUnreadCounts?.get(null)) as? IntArray ?: return
             if (!ensureStore() || !HiddenTopics.hasHidden(chatId)) return
             runCatching {
                 val controller = XposedHelpers.callMethod(param.thisObject, "getMessagesController")
@@ -168,7 +166,7 @@ fun Hooks.hideTopics() {
     // per dialog as new messages arrive; both leave out hidden topics.
     hideTopicsFromUnreadCounters(::ensureStore)
 
-    XposedBridge.hookAllMethods(topicsControllerClass, "findTopic", object : XC_MethodHook() {
+    XposedBridge.hookMethod(api.findTopic, object : XC_MethodHook() {
         override fun afterHookedMethod(param: MethodHookParam) {
             val chatId = param.args.getOrNull(0) as? Long ?: return
             val topic = param.result ?: return
@@ -176,7 +174,7 @@ fun Hooks.hideTopics() {
         }
     })
 
-    XposedBridge.hookAllMethods(topicsControllerClass, "processTopics", object : XC_MethodHook() {
+    XposedBridge.hookMethod(api.processTopics, object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             val chatId = param.args.getOrNull(0) as? Long ?: return
             (param.args.getOrNull(1) as? List<*>)?.forEach { topic ->
@@ -189,7 +187,7 @@ fun Hooks.hideTopics() {
     //    and shows that message, both taken from the row's MessageObject rather than from
     //    getTopics. When that message is in a hidden topic, the row shows the newest
     //    message of a visible topic instead.
-    hideTopicsInChatListRows(topicsControllerClass, ::ensureStore)
+    hideTopicsInChatListRows(api, ::ensureStore)
 
     // 3. Topics list screen: long-press selects topics and opens an action mode.
     //    Add "hide selected" / "show hidden" buttons to that action mode.
@@ -209,7 +207,7 @@ fun Hooks.hideTopics() {
                 if (!ensureStore()) return
                 log("Topic selection: chat $chatId topic ${topicId(topic)}", "DEBUG")
                 runCatching {
-                    updateSelectionButtons(fragment, chatId, loader)
+                    updateSelectionButtons(fragment, chatId, lpparam)
                 }.onFailure {
                     log("Failed to add topic selection buttons: ${it.message}", "ERROR")
                 }
@@ -255,7 +253,7 @@ fun Hooks.hideTopics() {
                     if (ru) "Скрыть топик" else "Hide topic",
                     Runnable {
                         HiddenTopics.hide(chatId, id)
-                        notifyTopicsChanged(loader, chatId)
+                        notifyTopicsChanged(lpparam, chatId)
                     },
                     false
                 )
@@ -267,7 +265,7 @@ fun Hooks.hideTopics() {
                         if (ru) "Показать скрытые топики ($hiddenCount)" else "Show hidden topics ($hiddenCount)",
                         Runnable {
                             HiddenTopics.unhideAll(chatId)
-                            notifyTopicsChanged(loader, chatId)
+                            notifyTopicsChanged(lpparam, chatId)
                         },
                         false
                     )
@@ -288,6 +286,7 @@ private const val UNREAD_FORUMS_SQL =
 private fun Hooks.hideTopicsFromUnreadCounters(ensureStore: () -> Boolean) {
     val databaseClass = loadClass("org.telegram.SQLite.SQLiteDatabase") ?: return
     val storageClass = loadClass("org.telegram.messenger.MessagesStorage") ?: return
+    val sparseClass = loadClass("org.telegram.messenger.support.LongSparseIntArray") ?: return
 
     XposedHelpers.findAndHookMethod(
         databaseClass, "queryFinalized", String::class.java, Array<Any>::class.java,
@@ -305,16 +304,26 @@ private fun Hooks.hideTopicsFromUnreadCounters(ensureStore: () -> Boolean) {
         }
     )
 
+    // MessagesStorage.database: its only SQLiteDatabase field.
+    val databaseField = storageClass.declaredFields.singleOrNull { it.type == databaseClass }
+        ?.apply { isAccessible = true } ?: run {
+            log("MessagesStorage database field not found", "ERROR")
+            return
+        }
+
     // updateFiltersReadCounter(dialogsToUpdate, dialogsToUpdateMentions, read): with
     // read == false it adds the dialogs that got new messages. A forum whose only unread
     // topics are hidden gets a zero count, which Telegram skips.
-    XposedBridge.hookAllMethods(storageClass, "updateFiltersReadCounter", object : XC_MethodHook() {
+    val updateFiltersReadCounter = storageClass.declaredMethods.singleOrNull {
+        it.parameterTypes.contentEquals(arrayOf(sparseClass, sparseClass, Boolean::class.javaPrimitiveType))
+    }
+    hook(updateFiltersReadCounter, "MessagesStorage.updateFiltersReadCounter", object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
             if (param.args.getOrNull(2) != false || !ensureStore()) return
             val hidden = HiddenTopics.byChat()
             if (hidden.isEmpty()) return
             runCatching {
-                val database = XposedHelpers.getObjectField(param.thisObject, "database")
+                val database = databaseField.get(param.thisObject) ?: return
                 for (counts in param.args.take(2)) {
                     if (counts == null) continue
                     val size = XposedHelpers.callMethod(counts, "size") as Int
@@ -347,53 +356,7 @@ private fun hasVisibleUnread(database: Any, did: Long, hiddenTopics: List<Int>):
     }
 }
 
-/**
- * Recounts unread chats for folder tabs and the main list after topics are hidden or
- * shown, the way MessagesStorage.saveDialogFilter does after a folder changes.
- */
-private fun recountUnreadChats(loader: ClassLoader, account: Int) {
-    runCatching {
-        val storageClass = XposedHelpers.findClass("org.telegram.messenger.MessagesStorage", loader)
-        val storage = XposedHelpers.callStaticMethod(storageClass, "getInstance", account)
-        val queue = XposedHelpers.callMethod(storage, "getStorageQueue")
-        XposedHelpers.callMethod(queue, "postRunnable", Runnable {
-            runCatching {
-                XposedHelpers.callMethod(storage, "calcUnreadCounters", false)
-                val utilities = XposedHelpers.findClass("org.telegram.messenger.AndroidUtilities", loader)
-                XposedHelpers.callStaticMethod(utilities, "runOnUIThread", Runnable {
-                    runCatching { applyRecountedUnreadChats(loader, storage, account) }.onFailure {
-                        log("Failed to apply unread counters: ${it.message}", "DEBUG")
-                    }
-                })
-            }.onFailure {
-                log("Failed to recount unread chats: ${it.message}", "DEBUG")
-            }
-        })
-    }.onFailure {
-        log("Failed to schedule unread recount: ${it.message}", "DEBUG")
-    }
-}
-
-private fun applyRecountedUnreadChats(loader: ClassLoader, storage: Any, account: Int) {
-    val controllerClass = XposedHelpers.findClass("org.telegram.messenger.MessagesController", loader)
-    val controller = XposedHelpers.callStaticMethod(controllerClass, "getInstance", account)
-    (XposedHelpers.getObjectField(controller, "dialogFilters") as? List<*>)?.forEach { filter ->
-        if (filter != null) {
-            XposedHelpers.setIntField(filter, "unreadCount", XposedHelpers.getIntField(filter, "pendingUnreadCount"))
-        }
-    }
-    XposedHelpers.setIntField(storage, "mainUnreadCount", XposedHelpers.getIntField(storage, "pendingMainUnreadCount"))
-    XposedHelpers.setIntField(storage, "archiveUnreadCount", XposedHelpers.getIntField(storage, "pendingArchiveUnreadCount"))
-    val nc = XposedHelpers.findClass("org.telegram.messenger.NotificationCenter", loader)
-    val center = XposedHelpers.callStaticMethod(nc, "getInstance", account)
-    XposedHelpers.callMethod(
-        center, "postNotificationName",
-        XposedHelpers.getStaticIntField(nc, "updateInterfaces"),
-        arrayOf<Any>(XposedHelpers.getStaticIntField(controllerClass, "UPDATE_MASK_READ_DIALOG_MESSAGE"))
-    )
-}
-
-private fun Hooks.hideTopicsInChatListRows(topicsControllerClass: Class<*>, ensureStore: () -> Boolean) {
+private fun Hooks.hideTopicsInChatListRows(api: TgDeobf.TopicsApi, ensureStore: () -> Boolean) {
     val buildLayout = TgDeobf.dialogCellBuildLayout(lpparam) ?: return
     val messageField = TgDeobf.dialogCellMessage(lpparam, buildLayout) ?: run {
         log("Chat list row message field not found — forum previews keep hidden topics", "ERROR")
@@ -402,6 +365,13 @@ private fun Hooks.hideTopicsInChatListRows(topicsControllerClass: Class<*>, ensu
     val messageObjectClass = loadClass("org.telegram.messenger.MessageObject") ?: return
     val messageClass = loadClass("org.telegram.tgnet.TLRPC\$Message") ?: return
     val controllerClass = loadClass("org.telegram.messenger.MessagesController") ?: return
+    // MessageObject.messageOwner: its only TLRPC.Message field.
+    val ownerField = messageObjectClass.declaredFields.singleOrNull {
+        it.type == messageClass && !java.lang.reflect.Modifier.isStatic(it.modifiers)
+    }?.apply { isAccessible = true } ?: run {
+        log("MessageObject.messageOwner not found — forum previews keep hidden topics", "ERROR")
+        return
+    }
     val messageObjectConstructor = runCatching {
         messageObjectClass.getConstructor(
             Int::class.javaPrimitiveType, messageClass,
@@ -418,9 +388,9 @@ private fun Hooks.hideTopicsInChatListRows(topicsControllerClass: Class<*>, ensu
     var groupField: Field? = null
 
     fun visibleTopMessage(account: Int, chatId: Long): Any? {
-        val controller = XposedHelpers.callStaticMethod(controllerClass, "getInstance", account)
-        val topics = XposedHelpers.callMethod(controller, "getTopicsController")
-            ?.let { XposedHelpers.callMethod(it, "getTopics", chatId) } as? List<*> ?: return null
+        val controller = TgDeobf.instance(controllerClass, account) ?: return null
+        val topics = api.getTopicsController.invoke(controller)
+            ?.let { api.getTopics.invoke(it, chatId) } as? List<*> ?: return null
         // getTopics is already filtered by the hook above.
         val topic = topics.filterNotNull()
             .filter { XposedHelpers.getObjectField(it, "topMessage") != null }
@@ -437,16 +407,13 @@ private fun Hooks.hideTopicsInChatListRows(topicsControllerClass: Class<*>, ensu
             val cell = param.thisObject ?: return
             val message = messageField.get(cell) ?: return
             runCatching {
-                val dialogId = XposedHelpers.callMethod(message, "getDialogId") as Long
-                if (dialogId >= 0) return
-                val chatId = -dialogId
+                val owner = ownerField.get(message) ?: return
+                val peer = XposedHelpers.getObjectField(owner, "peer_id") ?: return
+                val chatId = XposedHelpers.getLongField(peer, "channel_id")
+                if (chatId == 0L) return
                 if (!ensureStore() || !HiddenTopics.hasHidden(chatId)) return
-                val account = XposedHelpers.getIntField(message, "currentAccount")
-                val owner = XposedHelpers.getObjectField(message, "messageOwner") ?: return
-                val topicId = (XposedHelpers.callStaticMethod(
-                    messageObjectClass, "getTopicId", account, owner, true
-                ) as Number).toInt()
-                if (!HiddenTopics.isHidden(chatId, topicId)) return
+                val account = TgDeobf.selectedAccount(lpparam)
+                if (!HiddenTopics.isHidden(chatId, forumTopicId(owner))) return
 
                 val replacement = visibleTopMessage(account, chatId) ?: return
                 val albumField = groupField ?: buildLayout.declaringClass.declaredFields.firstOrNull { field ->
@@ -473,7 +440,7 @@ private const val TAG_SHOW_BUTTON = "killergramneo_show_hidden_topics"
  * org.telegram.ui.Components.NumberTextView that Telegram adds to that menu. The buttons
  * copy the look of a neighbouring action item, so no obfuscated menu API is needed.
  */
-private fun updateSelectionButtons(fragment: Any, chatId: Long, loader: ClassLoader) {
+private fun updateSelectionButtons(fragment: Any, chatId: Long, lpparam: LoadPackageParam) {
     val counter = fieldsOf(fragment.javaClass)
         .firstOrNull { it.type.name == "org.telegram.ui.Components.NumberTextView" }
         ?.apply { isAccessible = true }
@@ -504,13 +471,13 @@ private fun updateSelectionButtons(fragment: Any, chatId: Long, loader: ClassLoa
         val selected = selectedTopicIds(fragment)
         selected.forEach { HiddenTopics.hide(chatId, it) }
         leaveSelectionMode(fragment)
-        notifyTopicsChanged(loader, chatId)
+        notifyTopicsChanged(lpparam, chatId)
     }
     showButton.visibility = if (HiddenTopics.countHidden(chatId) > 0) View.VISIBLE else View.GONE
     showButton.setOnClickListener {
         HiddenTopics.unhideAll(chatId)
         leaveSelectionMode(fragment)
-        notifyTopicsChanged(loader, chatId)
+        notifyTopicsChanged(lpparam, chatId)
     }
 }
 
@@ -600,17 +567,54 @@ private fun findTopicIn(callback: Any, topicClass: Class<*>): Any? {
     }
 }
 
-/** TopicsController.findTopic(chatId, topicId); the topic id is a long on newer builds. */
-private fun findTopic(controller: Any, chatId: Long, topicId: Int): Any? =
-    runCatching { XposedHelpers.callMethod(controller, "findTopic", chatId, topicId.toLong()) }
-        .recoverCatching { XposedHelpers.callMethod(controller, "findTopic", chatId, topicId) }
-        .getOrNull()
+/** The resolved TopicsController members, set when the hooks are installed. */
+private var topics: TgDeobf.TopicsApi? = null
 
-/** MessagesController.isDialogMuted(dialogId, topicId); the topic id is a long on newer builds. */
-private fun isTopicMuted(controller: Any?, chatId: Long, topicId: Int): Boolean =
-    runCatching { XposedHelpers.callMethod(controller, "isDialogMuted", -chatId, topicId.toLong()) as Boolean }
-        .recoverCatching { XposedHelpers.callMethod(controller, "isDialogMuted", -chatId, topicId) as Boolean }
-        .getOrDefault(false)
+/** TopicsController.findTopic(chatId, topicId); the topic id is a long on newer builds. */
+private fun findTopic(controller: Any, chatId: Long, topicId: Int): Any? = runCatching {
+    val method = topics?.findTopic ?: return null
+    val id: Any = if (method.parameterTypes[1] == Long::class.javaPrimitiveType) topicId.toLong() else topicId
+    method.invoke(controller, chatId, id)
+}.getOrNull()
+
+/**
+ * MessagesController.isDialogMuted(dialogId, topicId, …): the topic id is a long on newer
+ * builds, and further parameters may follow (null / false).
+ */
+private fun isTopicMuted(controller: Any?, chatId: Long, topicId: Int): Boolean = runCatching {
+    val method = topics?.isDialogMuted ?: return false
+    val args: List<Any?> = method.parameterTypes.mapIndexed { index, type ->
+        when (index) {
+            0 -> -chatId
+            1 -> if (type == Long::class.javaPrimitiveType) topicId.toLong() else topicId
+            else -> if (type == Boolean::class.javaPrimitiveType) false else null
+        }
+    }
+    method.invoke(controller, *args.toTypedArray<Any?>()) as Boolean
+}.getOrDefault(false)
+
+/**
+ * The forum topic of a message, as MessageObject.getTopicId(account, message, true): a
+ * topic creation message starts its own topic, replies name theirs in reply_to, and
+ * everything else is in General (1).
+ */
+private fun forumTopicId(message: Any): Int {
+    val action = XposedHelpers.getObjectField(message, "action")
+    if (action?.javaClass?.simpleName?.endsWith("TL_messageActionTopicCreate") == true) {
+        return XposedHelpers.getIntField(message, "id")
+    }
+    val replyTo = XposedHelpers.getObjectField(message, "reply_to") ?: return 1
+    if (!XposedHelpers.getBooleanField(replyTo, "forum_topic")) return 1
+    val toMessage = XposedHelpers.getIntField(replyTo, "reply_to_msg_id")
+    val toTop = XposedHelpers.getIntField(replyTo, "reply_to_top_id")
+    val isService = message.javaClass.simpleName.endsWith("TL_messageService")
+    val isPin = action?.javaClass?.simpleName?.endsWith("TL_messageActionPinMessage") == true
+    return if (isService && !isPin) {
+        if (toMessage != 0) toMessage else toTop
+    } else {
+        if (toTop != 0) toTop else toMessage
+    }
+}
 
 private fun chatIdFromTopMessage(topic: Any): Long? = runCatching {
     val message = XposedHelpers.getObjectField(topic, "topMessage") ?: return null
@@ -618,15 +622,20 @@ private fun chatIdFromTopMessage(topic: Any): Long? = runCatching {
     XposedHelpers.getLongField(peer, "channel_id").takeIf { it != 0L }
 }.getOrNull()
 
-private fun notifyTopicsChanged(loader: ClassLoader, chatId: Long) {
+/**
+ * Reloads the topic UIs of [chatId] with the event TopicsController posts after loading
+ * topics. Unread chat counters of folder tabs follow on the next recount.
+ */
+private fun notifyTopicsChanged(lpparam: LoadPackageParam, chatId: Long) {
     runCatching {
-        val userConfig = XposedHelpers.findClass("org.telegram.messenger.UserConfig", loader)
-        val account = XposedHelpers.getStaticIntField(userConfig, "selectedAccount")
-        val nc = XposedHelpers.findClass("org.telegram.messenger.NotificationCenter", loader)
-        val center = XposedHelpers.callStaticMethod(nc, "getInstance", account)
-        val event = XposedHelpers.getStaticIntField(nc, "topicsDidLoaded")
-        XposedHelpers.callMethod(center, "postNotificationNameOnUIThread", event, arrayOf<Any>(chatId, true))
-        recountUnreadChats(loader, account)
+        val api = topics ?: return
+        val event = api.topicsDidLoaded?.getInt(null) ?: return
+        val post = api.postNotification ?: return
+        val center = TgDeobf.instance(post.declaringClass, TgDeobf.selectedAccount(lpparam)) ?: return
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            runCatching { post.invoke(center, event, arrayOf<Any>(chatId, true)) }
+                .onFailure { log("Failed to post topics update: ${it.message}", "ERROR") }
+        }
     }.onFailure {
         log("Failed to refresh topics UI: ${it.message}", "ERROR")
     }

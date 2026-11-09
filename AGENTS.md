@@ -13,7 +13,7 @@ Killergram Neofork is an **Xposed module** that enhances Telegram (and its forks
 
 The module runs in **two separate processes**:
 
-1. **Settings app** (`MainActivity`) — standalone Compose UI where users toggle features. Writes to world-readable `SharedPreferences`.
+1. **Settings app** (`MainActivity`) — standalone Compose UI where users toggle features.
 2. **Xposed hooks** (`MainHook`) — injected into the target Telegram process by the framework (libxposed API 102). Reads the framework's remote preferences and applies hooks conditionally.
 
 Preferences bridge the two processes: the UI keeps them in its own `SharedPreferences` and mirrors every change into the framework's remote preferences (`data/ModuleService`, bound through `XposedServiceHelper` in `KgApp`); the hooks read the remote ones at injection time.

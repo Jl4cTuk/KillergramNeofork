@@ -39,22 +39,56 @@ fun Hooks.hideFolderDuplicates() {
 
     val controllerClass = loadClass("org.telegram.messenger.MessagesController") ?: return
     val accountInstanceClass = loadClass("org.telegram.messenger.AccountInstance") ?: return
-    val filterClass = loadClass("org.telegram.messenger.MessagesController\$DialogFilter") ?: return
     val dialogClass = loadClass("org.telegram.tgnet.TLRPC\$Dialog") ?: return
     val dialogFolderClass = loadClass("org.telegram.tgnet.TLRPC\$TL_dialogFolder")
     val createView = TgDeobf.dialogsCreateView(lpparam) ?: return
     val dialogsArray = TgDeobf.dialogsArray(lpparam, createView.declaringClass) ?: return
 
     val access = runCatching {
+        // DialogFilter.includesDialog(accountInstance, dialogId, dialog): the folder's own
+        // membership test; DialogFilter is the class declaring it.
+        val includesDialog = TgDeobf.method(
+            lpparam, accountInstanceClass, "includesDialog:${dialogClass.name}"
+        ) { bridge ->
+            bridge.findMethod {
+                matcher {
+                    returnType("boolean")
+                    paramTypes(accountInstanceClass.name, "long", dialogClass.name)
+                }
+            }
+        } ?: error("DialogFilter.includesDialog not found")
+        val filterClass = includesDialog.declaringClass
+
+        // isDefault(): the no-arg boolean that only compares the folder id with 0.
+        val isDefault = TgDeobf.method(lpparam, filterClass, "isDefault", 0) { bridge ->
+            bridge.findMethod {
+                matcher {
+                    declaredClass(filterClass.name)
+                    returnType("boolean")
+                    paramCount(0)
+                }
+            }.filter { method ->
+                method.invokes.isEmpty() && method.usingFields.size == 1 &&
+                    method.usingFields.single().field.typeName == "int"
+            }
+        } ?: error("DialogFilter.isDefault not found")
+
+        // getDialogs(folderId): the only (int) -> ArrayList method.
+        val getDialogs = controllerClass.declaredMethods.singleOrNull {
+            it.name == "getDialogs" && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        } ?: controllerClass.declaredMethods.single {
+            it.returnType == ArrayList::class.java &&
+                it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        }
+
         Access(
-            controllerInstance = controllerClass.getMethod("getInstance", Int::class.javaPrimitiveType),
-            getDialogs = controllerClass.getMethod("getDialogs", Int::class.javaPrimitiveType),
-            dialogFilters = XposedHelpers.findField(controllerClass, "dialogFilters"),
-            accountInstance = accountInstanceClass.getMethod("getInstance", Int::class.javaPrimitiveType),
-            isDefault = filterClass.getMethod("isDefault"),
-            includesDialog = filterClass.getMethod(
-                "includesDialog", accountInstanceClass, Long::class.javaPrimitiveType, dialogClass
-            ),
+            controllerInstance = TgDeobf.getInstance(controllerClass) ?: error("MessagesController.getInstance"),
+            getDialogs = getDialogs.apply { isAccessible = true },
+            filterClass = filterClass,
+            dialogFilters = runCatching { XposedHelpers.findField(controllerClass, "dialogFilters") }.getOrNull(),
+            accountInstance = TgDeobf.getInstance(accountInstanceClass) ?: error("AccountInstance.getInstance"),
+            isDefault = isDefault,
+            includesDialog = includesDialog,
             dialogId = XposedHelpers.findField(dialogClass, "id"),
             dialogFolderClass = dialogFolderClass
         )
@@ -112,8 +146,11 @@ fun Hooks.hideFolderDuplicates() {
 
     // The Archive row's badge: the number of unread archived chats, counted by
     // MessagesStorage. Chats that belong to a folder are left out of it.
-    loadClass("org.telegram.messenger.MessagesStorage")?.let { storageClass ->
-        XposedHelpers.findAndHookMethod(storageClass, "getArchiveUnreadCount", object : XC_MethodHook() {
+    // Only builds that keep the name: an obfuscated build has many no-arg int getters.
+    loadClass("org.telegram.messenger.MessagesStorage")?.declaredMethods?.singleOrNull {
+        it.name == "getArchiveUnreadCount" && it.parameterTypes.isEmpty()
+    }?.let { getArchiveUnreadCount ->
+        XposedBridge.hookMethod(getArchiveUnreadCount, object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val count = param.result as? Int ?: return
                 if (count <= 0) return
@@ -172,16 +209,34 @@ fun Hooks.hideFolderDuplicates() {
 private class Access(
     val controllerInstance: Method,
     val getDialogs: Method,
-    val dialogFilters: Field,
+    val filterClass: Class<*>,
+    var dialogFilters: Field?,
     val accountInstance: Method,
     val isDefault: Method,
     val includesDialog: Method,
     val dialogId: Field,
     val dialogFolderClass: Class<*>?
 ) {
+    /**
+     * MessagesController.dialogFilters: on obfuscated builds, the ArrayList field holding
+     * DialogFilter objects (found once the user has a folder).
+     */
+    private fun filtersOf(controller: Any?): Any? {
+        controller ?: return null
+        dialogFilters?.let { return it.get(controller) }
+        val field = controller.javaClass.declaredFields.firstOrNull { field ->
+            field.type == ArrayList::class.java && !java.lang.reflect.Modifier.isStatic(field.modifiers) && run {
+                field.isAccessible = true
+                (field.get(controller) as? ArrayList<*>)?.any { filterClass.isInstance(it) } == true
+            }
+        } ?: return null
+        dialogFilters = field
+        return field.get(controller)
+    }
+
     /** The dialogs that belong to no folder, or null when there are no folders. */
     fun filter(controller: Any?, account: Int, dialogs: ArrayList<*>): ArrayList<Any?>? {
-        val filters = (dialogFilters.get(controller) as? List<*>)
+        val filters = (filtersOf(controller) as? List<*>)
             ?.filter { it != null && isDefault.invoke(it) != true }
             .orEmpty()
         if (filters.isEmpty()) return null

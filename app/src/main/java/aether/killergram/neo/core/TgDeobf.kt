@@ -314,6 +314,175 @@ object TgDeobf {
         "[TopicsController]: cache desynchronization",
     )
 
+    /** A messenger class's getInstance(account): its only static (int) -> itself method. */
+    fun getInstance(cls: Class<*>): Method? {
+        val key = "getInstance:${cls.name}"
+        if (cache.containsKey(key)) return cache[key] as Method?
+        val method = cls.declaredMethods.singleOrNull {
+            it.name == "getInstance" && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        } ?: cls.declaredMethods.singleOrNull {
+            java.lang.reflect.Modifier.isStatic(it.modifiers) && it.returnType == cls &&
+                it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        }
+        method?.isAccessible = true
+        cache[key] = method
+        if (method == null) log("${cls.name}.getInstance not found", "ERROR")
+        return method
+    }
+
+    /** cls.getInstance(account). */
+    fun instance(cls: Class<*>?, account: Int): Any? =
+        cls?.let { getInstance(it) }?.invoke(null, account)
+
+    /**
+     * UserConfig.selectedAccount: the static int saved under the "selectedAccount" key.
+     */
+    fun selectedAccount(lpparam: LoadPackageParam): Int {
+        val field = cache.getOrPut("selectedAccount") {
+            val userConfig = userConfig(lpparam) ?: return@getOrPut null
+            runCatching { userConfig.getDeclaredField("selectedAccount") }.getOrNull()
+                ?: withBridge(lpparam) { bridge ->
+                    bridge.findField {
+                        matcher {
+                            declaredClass(userConfig.name)
+                            type("int")
+                            modifiers(java.lang.reflect.Modifier.STATIC)
+                            readMethods { add { usingStrings("selectedAccount") } }
+                        }
+                    }.singleOrNull()?.getFieldInstance(lpparam.classLoader)
+                }.also { if (it == null) log("UserConfig.selectedAccount not found", "ERROR") }
+        } as Field? ?: return 0
+        field.isAccessible = true
+        return field.getInt(null)
+    }
+
+    /**
+     * The TopicsController members the topic hiding needs. Since Telegram 13.2
+     * getForumUnreadCount fills a static int[5] instead of returning it
+     * ([forumUnreadCounts]).
+     */
+    data class TopicsApi(
+        val controller: Class<*>,
+        val getTopics: Method,
+        val forumUnread: Method,
+        val forumUnreadCounts: Field?,
+        val findTopic: Method,
+        val processTopics: Method,
+        val isDialogMuted: Method?,
+        val getTopicsController: Method,
+        val topicsDidLoaded: Field?,
+        val postNotification: Method?,
+    )
+
+    fun topicsApi(lpparam: LoadPackageParam): TopicsApi? {
+        if (cache.containsKey(KEY_TOPICS_API)) return cache[KEY_TOPICS_API] as TopicsApi?
+        val resolved = runCatching { resolveTopicsApi(lpparam) }.onFailure {
+            log("TopicsController resolution failed: ${it.message}", "ERROR")
+        }.getOrNull()
+        cache[KEY_TOPICS_API] = resolved
+        if (resolved != null) {
+            log(
+                "Resolved TopicsController: getTopics=${resolved.getTopics.name} " +
+                    "unread=${resolved.forumUnread.name} find=${resolved.findTopic.name} " +
+                    "process=${resolved.processTopics.name} muted=${resolved.isDialogMuted?.name} " +
+                    "event=${resolved.topicsDidLoaded?.name} post=${resolved.postNotification?.name}",
+                "DEBUG"
+            )
+        } else {
+            log("Failed to resolve TopicsController members", "ERROR")
+        }
+        return resolved
+    }
+
+    private fun resolveTopicsApi(lpparam: LoadPackageParam): TopicsApi? {
+        val tc = topicsController(lpparam) ?: return null
+        val mc = messagesController(lpparam) ?: return null
+        val nc = notificationCenter(lpparam)
+        val topicClass = XposedHelpers.findClass("org.telegram.tgnet.TLRPC\$TL_forumTopic", lpparam.classLoader)
+        val methods = tc.declaredMethods.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) }
+        fun named(name: String) = methods.singleOrNull { it.name == name }
+
+        return withBridge(lpparam) { bridge ->
+            // getTopics(chatId): the cached list; the other (long) -> ArrayList methods
+            // build new lists from it.
+            val listGetters = methods.filter {
+                it.returnType == ArrayList::class.java &&
+                    it.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType))
+            }
+            val getTopics = named("getTopics") ?: listGetters.singleOrNull { candidate ->
+                listGetters.any { other ->
+                    other != candidate && bridge.getMethodData(other)?.invokes
+                        ?.any { it.name == candidate.name && it.className == tc.name } == true
+                }
+            } ?: return@withBridge null
+
+            val forumUnreadData = bridge.findMethod {
+                matcher {
+                    declaredClass(tc.name)
+                    paramTypes("long")
+                    addUsingField(
+                        "Lorg/telegram/tgnet/TLRPC\$TL_forumTopic;->unread_poll_votes_count:I",
+                        UsingType.Read
+                    )
+                    invokeMethods { add { declaredClass("java.util.Arrays"); name("fill") } }
+                }
+            }.singleOrNull() ?: return@withBridge null
+            val forumUnread = forumUnreadData.getMethodInstance(lpparam.classLoader)
+            val counts = if (forumUnread.returnType == Void.TYPE) {
+                tc.declaredFields.singleOrNull {
+                    java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == IntArray::class.java
+                } ?: return@withBridge null
+            } else null
+            val isDialogMuted = forumUnreadData.invokes.firstOrNull {
+                it.className == mc.name && it.returnTypeName == "boolean" &&
+                    it.paramTypeNames.firstOrNull() == "long"
+            }?.getMethodInstance(lpparam.classLoader)
+
+            val findTopic = named("findTopic") ?: methods.singleOrNull {
+                it.returnType == topicClass && it.parameterTypes.size == 2 &&
+                    it.parameterTypes[0] == Long::class.javaPrimitiveType
+            } ?: return@withBridge null
+
+            // processTopics(chatId, topics, …, loadType): the 6-argument loaded topics handler.
+            val processTopics = named("processTopics") ?: methods.singleOrNull {
+                it.returnType == Void.TYPE && it.parameterTypes.size == 6 &&
+                    it.parameterTypes[0] == Long::class.javaPrimitiveType &&
+                    it.parameterTypes[1] == ArrayList::class.java
+            } ?: return@withBridge null
+
+            val getTopicsController = mc.declaredMethods.singleOrNull {
+                it.returnType == tc && it.parameterTypes.isEmpty()
+            } ?: return@withBridge null
+
+            // The topics loaded event: processTopics posts it with (chatId, true).
+            val processData = bridge.getMethodData(processTopics)
+            val event = nc?.let { center ->
+                processData?.usingFields?.firstOrNull {
+                    it.usingType.isRead() && it.field.declaredClassName == center.name &&
+                        it.field.typeName == "int"
+                }?.field?.getFieldInstance(lpparam.classLoader)
+            }
+            val post = nc?.let { center ->
+                processData?.invokes?.firstOrNull {
+                    it.className == center.name && it.paramTypeNames == listOf("int", "java.lang.Object[]")
+                }?.getMethodInstance(lpparam.classLoader)
+            }
+
+            TopicsApi(
+                tc,
+                getTopics.apply { isAccessible = true },
+                forumUnread.apply { isAccessible = true },
+                counts?.apply { isAccessible = true },
+                findTopic.apply { isAccessible = true },
+                processTopics.apply { isAccessible = true },
+                isDialogMuted?.apply { isAccessible = true },
+                getTopicsController.apply { isAccessible = true },
+                event?.apply { isAccessible = true },
+                post?.apply { isAccessible = true },
+            )
+        }
+    }
+
     /**
      * One method, by its kept [name] (older builds) and otherwise by a DexKit query that
      * must match exactly one method.
@@ -677,11 +846,12 @@ object TgDeobf {
     /**
      * DialogCell.buildLayout(): lays out a chat list row from the cell's MessageObject,
      * including the Archive row's chat names and a forum row's topic names. It is the
-     * no-arg cell method that reads R.drawable.msg_mini_forumarrow (the arrow between
-     * sender and topic) and asks TopicsController for a topic's icon name.
+     * no-arg method of a View holding a MessageObject that reads
+     * R.drawable.msg_mini_forumarrow (the arrow between sender and topic).
      */
-    fun dialogCellBuildLayout(lpparam: LoadPackageParam): Method? =
-        cachedMethod(lpparam, KEY_DIALOG_CELL_BUILD_LAYOUT, "DialogCell.buildLayout") { bridge ->
+    fun dialogCellBuildLayout(lpparam: LoadPackageParam): Method? {
+        val messageObject = messageObject(lpparam) ?: return null
+        return cachedMethod(lpparam, KEY_DIALOG_CELL_BUILD_LAYOUT, "DialogCell.buildLayout") { bridge ->
             bridge.findMethod {
                 matcher {
                     returnType("void")
@@ -689,13 +859,17 @@ object TgDeobf {
                     readsRes(lpparam, "drawable", "msg_mini_forumarrow")
                 }
             }.filter { method ->
+                // A View with the row's MessageObject: other views draw the arrow too.
                 runCatching {
-                    android.view.View::class.java.isAssignableFrom(
-                        XposedHelpers.findClass(method.className, lpparam.classLoader)
-                    )
+                    val cls = XposedHelpers.findClass(method.className, lpparam.classLoader)
+                    android.view.View::class.java.isAssignableFrom(cls) &&
+                        cls.declaredFields.any {
+                            it.type == messageObject && !java.lang.reflect.Modifier.isStatic(it.modifiers)
+                        }
                 }.getOrDefault(false)
             }
         }
+    }
 
     /** DialogCell's MessageObject field: the message a chat list row shows. */
     fun dialogCellMessage(lpparam: LoadPackageParam, buildLayout: Method): Field? =
@@ -1162,6 +1336,7 @@ object TgDeobf {
     const val ROUND_VIDEO_LAST_CAMERA = "round_video_last_camera"
 
     private const val KEY_ENUM_SETTING = "enumSetting"
+    private const val KEY_TOPICS_API = "topicsApi"
     private const val KEY_INSTANT_CAMERA = "instantCamera"
     private const val KEY_ITEM_OPTIONS = "itemOptions"
     private const val KEY_TOPICS_LIST = "topicsList"
